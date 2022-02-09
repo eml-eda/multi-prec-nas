@@ -1,0 +1,6 @@
+.vscode/
+*.pyc
+*.tar
+log*
+data/
+sync_wandb.sh

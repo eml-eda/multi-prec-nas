@@ -10,7 +10,7 @@ import warnings
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 import numpy as np
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import QuantileTransformer
 
 import tensorflow as tf
 tf.config.threading.set_inter_op_parallelism_threads(4)
@@ -217,39 +217,57 @@ def main_worker(gpu, ngpus_per_node, args):
         val_shuffle_buffer_size = 10102
         test_shuffle_buffer_size = 4890
 
+        #ds_train = list(ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator())
+        #ds_val = list(ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator())
+        #ds_test = list(ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator())
+
         x_train = np.stack([_[0].squeeze(0) 
             for _ in ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator()
             ], axis=0)
         inp_shape = x_train.shape[1:]
-        x_train = RobustScaler().fit_transform(
+        x_train = QuantileTransformer().fit_transform(
             np.expand_dims(x_train.ravel(), -1)
             ).reshape(-1, *inp_shape)
         y_train = np.stack([_[1]
             for _ in ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator()
             ], axis=0)
-        #ds_train = list(ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator())
-        #ds_val = list(ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator())
-        #ds_test = list(ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator())
-
-        train_set = KWSDataWrapper(data_generator=ds_train)
-        val_set = KWSDataWrapper(data_generator=ds_val)
-        test_set = KWSDataWrapper(data_generator=ds_test)
-
+        train_set = KWSDataWrapper(x_train, y_train)
         if args.distributed:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         else:
             train_sampler = None
-
         train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=1, shuffle=(train_sampler is None),
+            train_set, batch_size=args.batch_size, shuffle=(train_sampler is None),
             num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
+        x_val = np.stack([_[0].squeeze(0) 
+            for _ in ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator()
+            ], axis=0)
+        inp_shape = x_val.shape[1:]
+        x_val = QuantileTransformer().fit_transform(
+            np.expand_dims(x_val.ravel(), -1)
+            ).reshape(-1, *inp_shape)
+        y_val = np.stack([_[1]
+            for _ in ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator()
+            ], axis=0) 
+        val_set = KWSDataWrapper(x_val, y_val)
         val_loader = torch.utils.data.DataLoader(
-            val_set, batch_size=1, shuffle=False,
+            val_set, batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
         
+        x_test = np.stack([_[0].squeeze(0) 
+            for _ in ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator()
+            ], axis=0)
+        inp_shape = x_test.shape[1:]
+        x_test = QuantileTransformer().fit_transform(
+            np.expand_dims(x_test.ravel(), -1)
+            ).reshape(-1, *inp_shape)
+        y_test = np.stack([_[1]
+            for _ in ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator()
+            ], axis=0) 
+        test_set = KWSDataWrapper(x_test, y_test)
         test_loader = torch.utils.data.DataLoader(
-            test_set, batch_size=1, shuffle=False,
+            test_set, batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
     else:
         raise ValueError('Unknown dataset: {}. Please use "GoogleSpeechCommands" instead"'.format(args.dataset)) 
@@ -450,11 +468,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images = images.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
 
-        images = images.squeeze(0)
-        target = target.squeeze(0)
+        #images = images.squeeze(0)
+        #target = target.squeeze(0)
 
         # compute output
         output = model(images.transpose(1,3).transpose(2,3))
+        import pdb; pdb.set_trace()
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -483,8 +502,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                 "Train/lr": curr_lr
             })
 
-
-
 def validate(val_loader, model, criterion, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -504,8 +521,8 @@ def validate(val_loader, model, criterion, epoch, args):
                 images = images.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
 
-            images = images.squeeze(0)
-            target = target.squeeze(0)
+            #images = images.squeeze(0)
+            #target = target.squeeze(0)
 
             # compute output
             output = model(images.transpose(1,3).transpose(2,3))
