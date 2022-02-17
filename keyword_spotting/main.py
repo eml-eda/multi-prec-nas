@@ -10,7 +10,7 @@ import warnings
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 import numpy as np
-from sklearn.preprocessing import QuantileTransformer
+from sklearn.preprocessing import QuantileTransformer, RobustScaler, MinMaxScaler
 
 import tensorflow as tf
 tf.config.threading.set_inter_op_parallelism_threads(4)
@@ -21,8 +21,8 @@ if gpus:
   try:
     # Currently, memory growth needs to be the same across GPUs
     for gpu in gpus:
-        #tf.config.experimental.set_memory_growth(gpu, True)
-        tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024)
+        tf.config.experimental.set_memory_growth(gpu, True)
+        #tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024)
     logical_gpus = tf.config.list_logical_devices('GPU')
     print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
   except RuntimeError as e:
@@ -208,7 +208,7 @@ def main_worker(gpu, ngpus_per_node, args):
         Flags, unparsed = kws_util.parse_command()
         Flags.data_dir = str(data_dir)
         Flags.bg_path = str(data_dir)
-        Flags.batch_size = 1
+        #Flags.batch_size = 1
         print(f'We will download data to {Flags.data_dir}')
         ds_train, ds_test, ds_val = kws_data.get_training_data(Flags)
         print("Done getting data")
@@ -217,58 +217,136 @@ def main_worker(gpu, ngpus_per_node, args):
         val_shuffle_buffer_size = 10102
         test_shuffle_buffer_size = 4890
 
-        #ds_train = list(ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator())
-        #ds_val = list(ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator())
-        #ds_test = list(ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator())
-
-        x_train = np.stack([_[0].squeeze(0) 
-            for _ in ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator()
-            ], axis=0)
-        inp_shape = x_train.shape[1:]
+        ds_train = list(ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator())
+        x_train, y_train = [], []
+        for x, y in ds_train:
+            x_train.append(x)
+            y_train.append(np.expand_dims(y, axis=1))
+        x_train = np.vstack(x_train)
+        y_train = np.vstack(y_train).squeeze(-1)
+        inp_shape = x_train.shape
         x_train = QuantileTransformer().fit_transform(
             np.expand_dims(x_train.ravel(), -1)
-            ).reshape(-1, *inp_shape)
-        y_train = np.stack([_[1]
-            for _ in ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator()
-            ], axis=0)
-        train_set = KWSDataWrapper(x_train, y_train)
-        if args.distributed:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        else:
-            train_sampler = None
-        train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=args.batch_size, shuffle=(train_sampler is None),
-            num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+            ).reshape(inp_shape)
+        #x_train = RobustScaler(quantile_range=(1,99)).fit_transform(
+        #    np.expand_dims(x_train.ravel(), -1)
+        #    ).reshape(inp_shape)
+        #x_train = MinMaxScaler((0,6)).fit_transform(
+        #    np.expand_dims(x_train.ravel(), -1)
+        #    ).reshape(inp_shape)
 
-        x_val = np.stack([_[0].squeeze(0) 
-            for _ in ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator()
-            ], axis=0)
-        inp_shape = x_val.shape[1:]
+        ds_val = list(ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator())
+        x_val, y_val = [], []
+        for x, y in ds_val:
+            x_val.append(x)
+            y_val.append(np.expand_dims(y, axis=1))
+        x_val = np.vstack(x_val)
+        y_val = np.vstack(y_val).squeeze(-1)
+        inp_shape = x_val.shape
         x_val = QuantileTransformer().fit_transform(
             np.expand_dims(x_val.ravel(), -1)
-            ).reshape(-1, *inp_shape)
-        y_val = np.stack([_[1]
-            for _ in ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator()
-            ], axis=0) 
-        val_set = KWSDataWrapper(x_val, y_val)
-        val_loader = torch.utils.data.DataLoader(
-            val_set, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.workers, pin_memory=True)
-        
-        x_test = np.stack([_[0].squeeze(0) 
-            for _ in ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator()
-            ], axis=0)
-        inp_shape = x_test.shape[1:]
+            ).reshape(inp_shape)
+        #x_val = RobustScaler(quantile_range=(1,99)).fit_transform(
+        #    np.expand_dims(x_val.ravel(), -1)
+        #    ).reshape(*inp_shape)
+        #x_val = MinMaxScaler((0,6)).fit_transform(
+        #    np.expand_dims(x_val.ravel(), -1)
+        #    ).reshape(*inp_shape)
+
+        ds_test = list(ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator())
+        x_test, y_test = [], []
+        for x, y in ds_test:
+            x_test.append(x)
+            y_test.append(np.expand_dims(y, axis=1))
+        x_test = np.vstack(x_test)
+        y_test = np.vstack(y_test).squeeze(-1)
+        inp_shape = x_test.shape
         x_test = QuantileTransformer().fit_transform(
             np.expand_dims(x_test.ravel(), -1)
-            ).reshape(-1, *inp_shape)
-        y_test = np.stack([_[1]
-            for _ in ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator()
-            ], axis=0) 
+            ).reshape(inp_shape)
+        #x_test = RobustScaler(quantile_range=(1,99)).fit_transform(
+        #    np.expand_dims(x_test.ravel(), -1)
+        #    ).reshape(*inp_shape)
+        #x_test = MinMaxScaler((0,6)).fit_transform(
+        #    np.expand_dims(x_test.ravel(), -1)
+        #    ).reshape(*inp_shape)
+        
+        #train_set = KWSDataWrapper(data_generator=ds_train)
+        #val_set = KWSDataWrapper(data_generator=ds_val)
+        #test_set = KWSDataWrapper(data_generator=ds_test)
+        train_set = KWSDataWrapper(x_train, y_train)
+        val_set = KWSDataWrapper(x_val, y_val)
         test_set = KWSDataWrapper(x_test, y_test)
-        test_loader = torch.utils.data.DataLoader(
-            test_set, batch_size=args.batch_size, shuffle=False,
+
+        train_loader = torch.utils.data.DataLoader(
+            train_set, batch_size=100, shuffle=True,
+            num_workers=args.workers, pin_memory=True, sampler=None)
+
+        val_loader = torch.utils.data.DataLoader(
+            val_set, batch_size=100, shuffle=False,
             num_workers=args.workers, pin_memory=True)
+        
+        test_loader = torch.utils.data.DataLoader(
+            test_set, batch_size=100, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+
+        #x_train = np.stack([_[0].squeeze(0) 
+        #    for _ in ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator()
+        #    ], axis=0)
+        #inp_shape = x_train.shape[1:]
+        #x_train = RobustScaler(quantile_range=(1,99)).fit_transform(
+        #    np.expand_dims(x_train.ravel(), -1)
+        #    ).reshape(-1, *inp_shape)
+        #x_train = MinMaxScaler((0,6)).fit_transform(
+        #    np.expand_dims(x_train.ravel(), -1)
+        #    ).reshape(-1, *inp_shape)
+        #y_train = np.stack([_[1]
+        #    for _ in ds_train.shuffle(train_shuffle_buffer_size).as_numpy_iterator()
+        #    ], axis=0)
+        #train_set = KWSDataWrapper(x_train, y_train)
+        #if args.distributed:
+        #    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        #else:
+        #    train_sampler = None
+        #train_loader = torch.utils.data.DataLoader(
+        #    train_set, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        #    num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+
+        #x_val = np.stack([_[0].squeeze(0) 
+        #    for _ in ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator()
+        #    ], axis=0)
+        #inp_shape = x_val.shape[1:]
+        #x_val = RobustScaler(quantile_range=(1,99)).fit_transform(
+        #    np.expand_dims(x_val.ravel(), -1)
+        #    ).reshape(-1, *inp_shape)
+        #x_val = MinMaxScaler((0,6)).fit_transform(
+        #    np.expand_dims(x_val.ravel(), -1)
+        #    ).reshape(-1, *inp_shape)
+        #y_val = np.stack([_[1]
+        #    for _ in ds_val.shuffle(val_shuffle_buffer_size).as_numpy_iterator()
+        #    ], axis=0) 
+        #val_set = KWSDataWrapper(x_val, y_val)
+        #val_loader = torch.utils.data.DataLoader(
+        #    val_set, batch_size=args.batch_size, shuffle=False,
+        #    num_workers=args.workers, pin_memory=True)
+        
+        #x_test = np.stack([_[0].squeeze(0) 
+        #    for _ in ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator()
+        #    ], axis=0)
+        #inp_shape = x_test.shape[1:]
+        #x_test = RobustScaler(quantile_range=(1,99)).fit_transform(
+        #    np.expand_dims(x_test.ravel(), -1)
+        #    ).reshape(-1, *inp_shape)
+        #x_test = MinMaxScaler((0,6)).fit_transform(
+        #    np.expand_dims(x_test.ravel(), -1)
+        #    ).reshape(-1, *inp_shape)
+        #y_test = np.stack([_[1]
+        #    for _ in ds_test.shuffle(test_shuffle_buffer_size).as_numpy_iterator()
+        #    ], axis=0) 
+        #test_set = KWSDataWrapper(x_test, y_test)
+        #test_loader = torch.utils.data.DataLoader(
+        #    test_set, batch_size=args.batch_size, shuffle=False,
+        #    num_workers=args.workers, pin_memory=True)
     else:
         raise ValueError('Unknown dataset: {}. Please use "GoogleSpeechCommands" instead"'.format(args.dataset)) 
     
@@ -468,12 +546,11 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             images = images.cuda(args.gpu, non_blocking=True)
         target = target.cuda(args.gpu, non_blocking=True)
 
-        #images = images.squeeze(0)
-        #target = target.squeeze(0)
+        images = images.squeeze(0)
+        target = target.squeeze(0)
 
         # compute output
         output = model(images.transpose(1,3).transpose(2,3))
-        import pdb; pdb.set_trace()
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -521,8 +598,8 @@ def validate(val_loader, model, criterion, epoch, args):
                 images = images.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
 
-            #images = images.squeeze(0)
-            #target = target.squeeze(0)
+            images = images.squeeze(0)
+            target = target.squeeze(0)
 
             # compute output
             output = model(images.transpose(1,3).transpose(2,3))
@@ -541,8 +618,8 @@ def validate(val_loader, model, criterion, epoch, args):
                 progress.display(i)
 
         # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f}'
-              .format(top1=top1))
+        print(' * Acc@1 {:.3f}'
+              .format(top1.avg))
 
     # Visualization
     if args.visualization:

@@ -14,6 +14,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -83,11 +84,14 @@ regularizer_targets = ['ops', 'weights']
 parser.add_argument('--regularization-target', '--rt', type=str,
                     choices=regularizer_targets,
                     help=f'regularization target: {*regularizer_targets,}')
-parser.add_argument('-gs', '--gumbel-softmax', action='store_true', default=False,
+parser.add_argument('--gumbel-softmax', dest='gumbel_softmax', action='store_true', default=False,
                     help='use gumbel-softmax instead of plain softmax')
+parser.add_argument('--no-gumbel-softmax', dest='gumbel_softmax', action='store_false', default=True,
+                    help='use plain softmax instead of gumbel-softmax')
 parser.add_argument('--hard-gs', action='store_true', default=False, help='use hard gumbel-softmax')
 parser.add_argument('--temperature', default=5, type=float, help='Initial temperature value')
-parser.add_argument('-p', '--print-freq', default=100, type=int,
+parser.add_argument('--anneal-temp', action='store_true', default=False, help='anneal temperature')
+parser.add_argument('-p', '--print-freq', default=1000, type=int,
                     metavar='N', help='print frequency (default: 100)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
@@ -392,7 +396,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 if 'alpha' in name:
                     param.requires_grad = False
             # Warmup model
-            warmup_best_epoch, warmup_best_acc1 = train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Warmup')
+            warmup_best_epoch, warmup_best_acc1 = \
+                train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Warmup')
             
             print(f'Best Acc@1 {warmup_best_acc1} @ epoch {warmup_best_epoch}')
 
@@ -542,6 +547,11 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
     best_epoch = args.start_epoch
     best_acc1 = 0
     temp = args.temperature
+
+    # Plot gradients
+    if args.visualization and args.debug:
+        wandb.watch(model, log='all')
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -569,7 +579,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
         acc1 = validate(val_loader, model, criterion, epoch, args, temp, scope=scope)
 
         # Anneal temperature 
-        if args.gumbel_softmax:
+        if args.anneal_temp and scope == 'Search':
             temp = anneal_temperature(temp)
 
         # remember best acc@1 and save checkpoint
@@ -635,6 +645,18 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                         #wandb.log({'Epoch': epoch})
                         wandb.log(log_dict)
 
+        # Debug: plot for a single layer evolution of alphas and softmax
+        if args.debug and scope == 'Search':
+            alpha = model.state_dict()['model.bb_1.conv0.mix_weight.alpha_weight'].clone().detach().cpu()
+            sw = F.softmax(alpha/temp, dim=0).clone().detach().cpu().numpy()
+            alpha = alpha.numpy()
+            log_dict = {'Epoch': epoch}
+            for ch in range(alpha.shape[1]):
+                for prec in range(alpha.shape[0]):
+                    log_dict['alpha/ch'+str(ch)+'-prec'+str(prec)] = alpha[prec, ch]
+                    log_dict['softmax/ch'+str(ch)+'-prec'+str(prec)] = sw[prec, ch]
+            wandb.log(log_dict)
+
         # Debug: bar-plot with fraction of chosen precisions for each layer at each epoch
         if args.debug and scope == 'Search':
             discrete_arch = sample_arch(model.state_dict())
@@ -658,6 +680,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
+    complexity_losses = AverageMeter('CLoss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     curr_lr = optimizer.param_groups[0]['lr']
     curr_lra = arch_optimizer.param_groups[0]['lr']
@@ -681,7 +704,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output = model(images.transpose(1,3).transpose(2,3), temp, args.hard_gs)
+        output, loss_complexity = model(images.transpose(1,3).transpose(2,3), temp, args.hard_gs)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -690,13 +713,15 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         top1.update(acc1[0].item(), images.size(0))
         # complexity penalty
         if args.complexity_decay != 0 and scope == 'Search':
-            if hasattr(model, 'module'):
-                loss_complexity = args.complexity_decay * model.module.complexity_loss()
-            else:
-                loss_complexity = args.complexity_decay * model.complexity_loss()
+            #if hasattr(model, 'module'):
+            #    loss_complexity = args.complexity_decay * model.module.complexity_loss()
+            #else:
+            #    loss_complexity = args.complexity_decay * model.complexity_loss()
+            loss_complexity = args.complexity_decay * loss_complexity
             loss += loss_complexity
         else:
             loss_complexity = 0
+        complexity_losses.update(loss_complexity.item(), images.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -724,7 +749,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         wandb.log({
                 scope + "_Epoch": epoch,
                 scope + "_Train/Loss": losses.avg, 
-                scope + "_Train/Complexity_Loss": loss_complexity, 
+                scope + "_Train/Complexity_Loss": complexity_losses.avg, 
                 scope + "_Train/Acc": top1.avg,
                 scope + "_Train/lr": curr_lr,
                 scope + "_Train/lra": curr_lra,
@@ -751,7 +776,7 @@ def validate(val_loader, model, criterion, epoch, args, temp, scope='Search'):
             target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            output = model(images.transpose(1,3).transpose(2,3), temp, args.hard_gs)
+            output, _ = model(images.transpose(1,3).transpose(2,3), temp, args.hard_gs)
             loss = criterion(output, target)
 
             # measure accuracy and record loss
@@ -767,8 +792,8 @@ def validate(val_loader, model, criterion, epoch, args, temp, scope='Search'):
                 progress.display(i)
 
         # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f}'
-              .format(top1=top1.avg))
+        print(' * Acc@1 {:.3f}'
+              .format(top1.avg))
     
     # Visualization
     if args.visualization:
@@ -846,8 +871,9 @@ def adjust_learning_rate(optimizer, arch_optimizer, epoch, args):
         param_group['lr'] = args.lr
 
 def anneal_temperature(temperature):
-    # FbNetV20-like annealing
+    # FbNetV2-like annealing
     return temperature * math.exp(-0.045)
+    #return temperature * 1
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""

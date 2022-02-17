@@ -506,8 +506,8 @@ def validate(val_loader, model, criterion, epoch, args):
                 progress.display(i)
 
         # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f}'
-              .format(top1=top1.avg))
+        print(' * Acc@1 {:.3f}'
+              .format(top1.avg))
 
     # Visualization
     if args.visualization:

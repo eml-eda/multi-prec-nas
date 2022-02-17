@@ -16,9 +16,9 @@ project="multi-Precision-nas_vww"
 
 #tags="warmup"
 #tags="fp"
-#tags="init_same warmup reg_w gumbel"
+tags="init_same warmup reg_w gumbel"
 #tags="init_same warmup reg_w"
-tags="init_same warmup reg_w ft_as_mp"
+#tags="init_same warmup reg_w ft_as_mp"
 
 mkdir -p ${path}/vww
 mkdir -p ${path}/vww/${arch}
@@ -31,8 +31,9 @@ if [[ "$3" == "search" ]]; then
         --lr 0.001 --lra 0.01 --wd 1e-4 \
         --ai same --cd $strength --rt weights \
         --seed 42 --gpu 0 \
-        --gumbel-softmax --temperature 5 \
+        --no-gumbel-softmax --temperature 0.1 --anneal-temp \
         --visualization -pr ${project} --tags ${tags} --debug | tee ${path}/vww/${arch}/model_${strength}/log_search_$strength.txt
+        #--visualization -pr ${project} --tags ${tags} --debug | tee ${path}/vww/${arch}/model_${strength}/log_search_$strength.txt
 fi
 
 if [[ "$4" == "ft" ]]; then

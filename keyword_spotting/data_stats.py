@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.preprocessing import RobustScaler, QuantileTransformer
+from sklearn.preprocessing import RobustScaler, QuantileTransformer, MinMaxScaler
 import seaborn as sns
 import torch
 
@@ -70,15 +70,18 @@ def plot_norm_data(data_dir):
     plt.savefig('keyword_spotting/raw_train.png')
     #
     inp_shape = x_train.shape[1:]
-    x_train = QuantileTransformer().fit_transform(
+    x_train = RobustScaler(quantile_range=(1,99)).fit_transform(
         np.expand_dims(x_train.ravel(), -1)
         ).reshape(-1, *inp_shape)
+    #x_train = MinMaxScaler((0,6)).fit_transform(
+    #    np.expand_dims(x_train.ravel(), -1)
+    #    ).reshape(-1, *inp_shape) 
     #
     fig, ax = plt.subplots()
     sns.histplot(x_train.ravel(), kde=True)
     ax.set_ylim(0, 160000)
-    ax.title.set_text('QuantileTransformer Training data')
-    plt.savefig('keyword_spotting/quantiletransf_train.png')
+    ax.title.set_text('RobustScaler Training data')
+    plt.savefig('keyword_spotting/rs_1-99_train.png')
     #
 
 if __name__ == '__main__':

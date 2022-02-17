@@ -397,7 +397,7 @@ def quantmobilenetv1_w248a8_multiprec(arch_cfg_path, **kwargs):
     #assert len(archas) == 21 # 21 insead of 19 because conv1 and fc activations are also quantized
     #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized 
     ##
-    import pdb; pdb.set_trace()
+    #import pdb; pdb.set_trace()
     model = TinyMLMobilenetV1(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
     if kwargs['fine_tune']:
         # Load all weights

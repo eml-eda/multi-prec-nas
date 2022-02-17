@@ -4,7 +4,7 @@ warmup=$2
 path="/space/risso/multi_prec_exp"
 # arch: {mix, quant}mobilenetv1_w248a248_multiprec, {mix, quant}mobilenetv1_w0248a248_multiprec
 #arch="dscnn_fp"
-arch="dscnn_w8a8"
+arch="dscnn_w2a8"
 project="multi-Precision-nas_kws"
 
 #tags="warmup"

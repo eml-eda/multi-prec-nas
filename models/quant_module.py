@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import copy
+import math
 
 import torch
 import torch.nn as nn
@@ -739,6 +740,7 @@ class SharedMixQuantChanConv2d(nn.Module):
         #assert not kwargs['bias']
         self.bits = bits
         self.gumbel = gumbel
+        self.param_size = inplane * outplane * kwargs['kernel_size'] / kwargs['groups'] * 1e-6
         self.alpha_weight = Parameter(torch.Tensor(len(self.bits)))
         self.alpha_init = kwargs.pop('alpha_init', 'same')
         if self.alpha_init == 'same':
@@ -751,6 +753,7 @@ class SharedMixQuantChanConv2d(nn.Module):
 
     def forward(self, input, temp, is_hard):
         mix_quant_weight = []
+        mix_wbit = 0
         #self.alpha_weight = torch.nn.Parameter(clamp(self.alpha_weight, -100, +100))
         if not self.gumbel:
             sw = F.softmax(self.alpha_weight, dim=0)
@@ -764,6 +767,8 @@ class SharedMixQuantChanConv2d(nn.Module):
             quant_weight = _channel_asym_min_max_quantize.apply(weight, bit) 
             scaled_quant_weight = quant_weight * sw[i]
             mix_quant_weight.append(scaled_quant_weight)
+            # Complexity
+            mix_wbit += sum(sw[i]) * bit
         if bias is not None:
             quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
         else:
@@ -771,7 +776,9 @@ class SharedMixQuantChanConv2d(nn.Module):
         mix_quant_weight = sum(mix_quant_weight)
         out = F.conv2d(
             input, mix_quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
-        return out
+        # Measure weight complexity for reg-loss
+        w_complexity = mix_wbit * self.param_size
+        return out, w_complexity
 
 # DJP
 class SharedMultiPrecConv2d(nn.Module):
@@ -786,25 +793,43 @@ class SharedMultiPrecConv2d(nn.Module):
         self.hard_prune = False
         self.prune = 0 in bits
         self.cout = outplane
+        self.param_size = inplane * outplane * kwargs['kernel_size'] / kwargs['groups'] * 1e-6
         self.alpha_weight = Parameter(torch.Tensor(len(self.bits), self.cout))
         self.alpha_init = kwargs.pop('alpha_init', 'same')
         if self.alpha_init == 'same' or self.alpha_init is None:
-            self.alpha_weight.data.fill_(0.01)
+            if self.gumbel:
+                val_equiprob = 1.0 / len(self.bits)
+                init_logit = math.log(val_equiprob/(1-val_equiprob))
+            else:
+                init_logit = 0.01
+            self.alpha_weight.data.fill_(init_logit)
         elif self.alpha_init == 'scaled':
             max_prec = max(self.bits)
+            scaled_val = torch.tensor([bit/max_prec for bit in self.bits])
+            if self.gumbel:
+                scaled_prob = F.softmax(scaled_val, dim=0)
+                scaled_logit = torch.log(scaled_prob/(1-scaled_prob))
+            else:
+                scaled_logit = scaled_val
             for i in range(len(self.bits)):
-                self.alpha_weight.data[i].fill_(self.bits[i] / max_prec)
+                self.alpha_weight.data[i].fill_(scaled_logit[i])
         else:
             raise ValueError(f'Unknown alpha_init: {self.alpha_init}')
         self.conv = nn.Conv2d(inplane, outplane, **kwargs)
+        self.register_buffer('sw_buffer', torch.zeros(self.alpha_weight.shape, dtype=torch.float))
 
     def forward(self, input, temp, is_hard):
         mix_quant_weight = []
+        mix_wbit = 0
         if not self.gumbel:
-            sw = F.softmax(self.alpha_weight, dim=0)
+            sw = F.softmax(self.alpha_weight/temp, dim=0)
         else:
             # If is_hard is True the output is one-hot
-            sw = F.gumbel_softmax(self.alpha_weight, tau=temp, hard=is_hard, dim=0)
+            if self.training: # If model.train()
+                sw = F.gumbel_softmax(self.alpha_weight, tau=temp, hard=is_hard, dim=0)
+                self.sw_buffer = sw.clone().detach()
+            else: # If model.eval()
+                sw = self.sw_buffer
         # Always False for now (old implementationf of hard-pruning)
         if self.prune and self.hard_prune:
             sw_bin = _prune_channels.apply(sw)
@@ -815,6 +840,9 @@ class SharedMultiPrecConv2d(nn.Module):
             quant_weight = _channel_asym_min_max_quantize.apply(weight, bit)
             scaled_quant_weight = quant_weight * sw[i].view((self.cout, 1, 1, 1))
             mix_quant_weight.append(scaled_quant_weight)
+            # Complexity
+            mix_wbit += sum(sw[i]) * bit
+        mix_wbit = mix_wbit / self.cout
         if bias is not None:
             quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
         else:
@@ -825,7 +853,9 @@ class SharedMultiPrecConv2d(nn.Module):
             mix_quant_weight = sum(mix_quant_weight)
         out = F.conv2d(
             input, mix_quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
-        return out
+        # Measure weight complexity for reg-loss
+        w_complexity = mix_wbit * self.param_size
+        return out, w_complexity
 
 class SharedMixQuantConv2d(nn.Module):
 
@@ -883,6 +913,7 @@ class MultiPrecActivConv2d(nn.Module):
         else:
             self.fc = False
         self.gumbel = kwargs.pop('gumbel', False)
+        self.temp = 1
         # build mix-precision branches
         # TODO: change here for multi-prec activations
         self.mix_activ = MixQuantPaCTActiv(self.abits, gumbel=self.gumbel)
@@ -920,14 +951,15 @@ class MultiPrecActivConv2d(nn.Module):
         self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
 
     def forward(self, input, temp, is_hard):
+        self.temp = temp
         in_shape = input.shape
         tmp = torch.tensor(in_shape[1] * in_shape[2] * in_shape[3] * 1e-3, dtype=torch.float)
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1] * in_shape[-2], dtype=torch.float)
         self.size_product.copy_(tmp)
         out = self.mix_activ(input, temp, is_hard)
-        out = self.mix_weight(out, temp, is_hard)
-        return out
+        out, w_complexity = self.mix_weight(out, temp, is_hard)
+        return out, w_complexity
 
     def complexity_loss(self):
         if not self.first_layer:
@@ -970,7 +1002,7 @@ class MultiPrecActivConv2d(nn.Module):
         size_product = float(self.size_product.cpu().numpy())
         memory_size = float(self.memory_size.cpu().numpy())
         if not self.first_layer:
-            prob_activ = F.softmax(self.mix_activ.alpha_activ, dim=0)
+            prob_activ = F.softmax(self.mix_activ.alpha_activ/self.temp, dim=0)
             prob_activ = prob_activ.detach().cpu().numpy()
             best_activ = prob_activ.argmax()
             mix_abit = 0
@@ -981,7 +1013,7 @@ class MultiPrecActivConv2d(nn.Module):
             prob_activ = 1
             mix_abit = 8
         if not self.fc or self.fc == 'multi':
-            prob_weight = F.softmax(self.mix_weight.alpha_weight, dim=0)
+            prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
             prob_weight = prob_weight.detach().cpu().numpy()
             best_weight = prob_weight.argmax(axis=0)
             mix_wbit = 0
@@ -995,7 +1027,7 @@ class MultiPrecActivConv2d(nn.Module):
                 prob_weight = 1
                 mix_wbit = 8
             elif self.fc == 'mixed':
-                prob_weight = F.softmax(self.mix_weight.alpha_weight, dim=0)
+                prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
                 prob_weight = prob_weight.detach().cpu().numpy()
                 best_weight = prob_weight.argmax(axis=0)
                 mix_wbit = 0

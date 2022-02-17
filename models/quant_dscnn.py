@@ -51,7 +51,7 @@ class DS_CNN(nn.Module):
         self.model = nn.Sequential(
             # first_layer=True removes the ReLU activation
             conv_func(1, 64, abits=archas[0], wbits=archws[0], 
-                        kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, first_layer=True, **kwargs), # 1
+                        kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, first_layer=False, **kwargs), # 1
             #conv_func(1, 64, abits=archas[0], wbits=archws[0], 
             #            kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, **kwargs), # 1
             nn.BatchNorm2d(64, affine=bnaff),
@@ -126,7 +126,7 @@ def quantdscnn_w8a8(arch_cfg_path, **kwargs):
 # MR
 def quantdscnn_w4a8(arch_cfg_path, **kwargs):
     # This precisions can be whatever
-    archas, archws = [4] * 9, [4] * 9
+    archas, archws = [8] * 9, [4] * 9
     #assert len(archas) == 10
     #assert len(archws) == 10
     return DS_CNN(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='fixed', **kwargs)

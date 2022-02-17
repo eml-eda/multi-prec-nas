@@ -30,7 +30,7 @@ def dw3x3(conv_func, in_planes, out_planes, stride=1, **kwargs):
 def fc(conv_func, in_planes, out_planes, stride=1, groups=1, search_fc=None, **kwargs):
     "fc mapped to conv"
     return conv_func(in_planes, out_planes, kernel_size=1, groups=groups, stride=stride,
-                     padding=0, bias=False, fc=search_fc, **kwargs)
+                     padding=0, bias=True, fc=search_fc, **kwargs)
 
 # MR
 class Backbone(nn.Module):
@@ -54,23 +54,38 @@ class Backbone(nn.Module):
         self.pool = nn.AvgPool2d(int(input_size/(2**5)))
 
     def forward(self, x, temp, is_hard):
-        out = self.input_layer(x, temp, is_hard)
+        w_complexity = 0
+        out, w_comp = self.input_layer(x, temp, is_hard)
+        w_complexity += w_comp
         out = self.bn(out)
-        out = self.bb_1(out, temp, is_hard)
-        out = self.bb_2(out, temp, is_hard)
-        out = self.bb_3(out, temp, is_hard)
-        out = self.bb_4(out, temp, is_hard)
-        out = self.bb_5(out, temp, is_hard)
-        out = self.bb_6(out, temp, is_hard)
-        out = self.bb_7(out, temp, is_hard)
-        out = self.bb_8(out, temp, is_hard)
-        out = self.bb_9(out, temp, is_hard)
-        out = self.bb_10(out, temp, is_hard)
-        out = self.bb_11(out, temp, is_hard)
-        out = self.bb_12(out, temp, is_hard)
-        out = self.bb_13(out, temp, is_hard)
+        out, w_comp1 = self.bb_1(out, temp, is_hard)
+        w_complexity += w_comp1
+        out, w_comp2 = self.bb_2(out, temp, is_hard)
+        w_complexity += w_comp2
+        out, w_comp3 = self.bb_3(out, temp, is_hard)
+        w_complexity += w_comp3
+        out, w_comp4 = self.bb_4(out, temp, is_hard)
+        w_complexity += w_comp4
+        out, w_comp5 = self.bb_5(out, temp, is_hard)
+        w_complexity += w_comp5
+        out, w_comp6 = self.bb_6(out, temp, is_hard)
+        w_complexity += w_comp6
+        out, w_comp7 = self.bb_7(out, temp, is_hard)
+        w_complexity += w_comp7
+        out, w_comp8 = self.bb_8(out, temp, is_hard)
+        w_complexity += w_comp8
+        out, w_comp9 = self.bb_9(out, temp, is_hard)
+        w_complexity += w_comp9
+        out, w_comp10 = self.bb_10(out, temp, is_hard)
+        w_complexity += w_comp10
+        out, w_comp11 = self.bb_11(out, temp, is_hard)
+        w_complexity += w_comp11
+        out, w_comp12 = self.bb_12(out, temp, is_hard)
+        w_complexity += w_comp12
+        out, w_comp13 = self.bb_13(out, temp, is_hard)
+        w_complexity += w_comp13
         out = self.pool(out)
-        return out
+        return out, w_complexity
 
 # AB
 class BasicBlock(nn.Module):
@@ -106,13 +121,13 @@ class BasicBlockGumbel(nn.Module):
         #self.relu1 = nn.ReLU(inplace=True)
 
     def forward(self, x, temp, is_hard):
-        out = self.conv0(x, temp, is_hard)
+        out, w_complexity0 = self.conv0(x, temp, is_hard)
         out = self.bn0(out)
         #out = self.relu0(out)
-        out = self.conv1(out, temp, is_hard)
+        out, w_complexity1 = self.conv1(out, temp, is_hard)
         out = self.bn1(out)
         #out = self.relu1(out)
-        return out
+        return out, w_complexity0 + w_complexity1
 
 # AB
 def make_divisible(x, divisible_by=8):
@@ -265,10 +280,14 @@ class TinyMLMobilenetV1(nn.Module):
                     m.bias.data.zero_()
 
     def forward(self, x, temp, is_hard):
-        x = self.model(x, temp, is_hard)
+        x, w_comp0 = self.model(x, temp, is_hard)
         x = x if self.search_fc else x.view(x.size(0), -1)
-        x = self.fc(x, temp, is_hard)[:, :, 0, 0] if self.search_fc else self.fc(x)
-        return x
+        if self.search_fc:
+            x, w_comp1 = self.fc(x, temp, is_hard)
+            return x[:, :, 0, 0], w_comp0+w_comp1
+        else:
+            x = self.fc(x)
+            return x, w_comp0
 
     def complexity_loss(self):
         size_product = []
