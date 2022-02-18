@@ -8,6 +8,7 @@ path="/space/risso/multi_prec_exp"
 #arch="mobilenetv1_w2a8"
 #arch="mobilenetv1_w4a8"
 #arch="mobilenetv1_w8a8"
+#arch="mobilenetv1_w8a8_pretrained"
 arch="mobilenetv1_w0248a8_multiprec"
 #arch="mobilenetv1_w248a8_multiprec"
 #arch="mobilenetv1_w248a8_chan"
@@ -26,8 +27,9 @@ mkdir -p ${path}/vww/${arch}/model_${strength}
 
 if [[ "$3" == "search" ]]; then
     echo Search
-    python3 visual_wake_words/search.py ${path}/vww/${arch}/model_${strength} -a mix${arch} -d coco2014_96_tf \
-        --epochs 70 --step-epoch 10 -b 32 --warmup ${warmup}\
+    python3 visual_wake_words/search.py ${path}/vww/${arch}/model_${strength} -a mix${arch} \
+        -d coco2014_96_tf --arch-data-split 0.2 \
+        --epochs 70 --step-epoch 10 -b 32 --warmup ${warmup} --warmup-8bit \
         --lr 0.001 --lra 0.01 --wd 1e-4 \
         --ai same --cd $strength --rt weights \
         --seed 42 --gpu 0 \

@@ -9,6 +9,7 @@ from . import quant_module as qm
 __all__ = [
    'quantmobilenetv1_fp', 
    'quantmobilenetv1_w2a8', 'quantmobilenetv1_w4a8', 'quantmobilenetv1_w8a8',
+   'quantmobilenetv1_w8a8_pretrained',
    'quantmobilenetv1_w0248a8_multiprec', 'quantmobilenetv1_w248a8_multiprec',
    'quantmobilenetv1_w248a8_chan', 'quantmobilenetv1_w248a8_chan_mp'
 ]
@@ -354,6 +355,16 @@ def quantmobilenetv1_w8a8(arch_cfg_path, **kwargs):
     #assert len(archas) == 10
     #assert len(archws) == 10
     return TinyMLMobilenetV1(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantmobilenetv1_w8a8_pretrained(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 30, [8] * 30
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    checkpoint = torch.load(arch_cfg_path)['state_dict']
+    model = TinyMLMobilenetV1(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+    model.load_state_dict(checkpoint)
+    return model
 
 # MR
 # qtz_fc: None or 'fixed' or 'mixed' or 'multi' 

@@ -39,6 +39,8 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch Visual Wake Word Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+parser.add_argument('--arch-data-split', type=float, default=None, 
+                    help='Split of the data to use for the update of alphas')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='mobilenetv1',
                     choices=model_names,
                     help='model architecture: ' +
@@ -57,6 +59,8 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
 parser.add_argument('--warmup', default=0, type=int,
                     help='number of warmup epochs'
                         '(default: 0 -> no warmup)')
+parser.add_argument('--warmup-8bit', action='store_true', default=False,
+                    help='Use model pretrained on 8-bit as starting point')
 parser.add_argument('-b', '--batch-size', default=32, type=int,
                     metavar='N',
                     help='mini-batch size (default: 32), this is the total '
@@ -380,7 +384,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print('{}: {}'.format(key, value))
 
     # If warmup is enabled check if pretrained model exists
-    if args.warmup != 0:
+    if args.warmup != 0 and args.warmup_8bit:
         warmup_pretrained_checkpoint = args.data.parent / ('warmup_' + str(args.warmup) + '.pth.tar')
         if warmup_pretrained_checkpoint.exists():
             print(f"=> loading pretrained model '{warmup_pretrained_checkpoint}'")
@@ -405,6 +409,10 @@ def main_worker(gpu, ngpus_per_node, args):
             for name, param in model.named_parameters():
                 if 'alpha' in name:
                     param.requires_grad = True
+    elif args.warmup_8bit:
+        pretrained_checkpoint = args.data.parent / ('warmup_8bit.pth.tar')
+        state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
 
@@ -561,7 +569,32 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
         #scheduler.step()
 
         # train for one epoch
-        train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
+
+        # If not None split data accordingly to args.arch_data_split
+        # (1 - args.arch_data_split) is the fraction of training data used for normal weights
+        # (args.arch_data_split) is the fraction of training data used for alpha weights
+        if args.arch_data_split is not None:
+            # Randomly split data
+            data = train_loader.dataset
+            len_data_a = int(len(data) * args.arch_data_split)
+            len_data_w = len(data) - len_data_a
+            data_w, data_a = torch.utils.data.random_split(data, [len_data_w, len_data_a])
+            train_loader_w = torch.utils.data.DataLoader(
+                data_w, batch_size=None, shuffle=True, 
+                num_workers=args.workers, pin_memory=True)
+            train_loader_a = torch.utils.data.DataLoader(
+                data_a, batch_size=None, shuffle=True, 
+                num_workers=args.workers, pin_memory=True)
+            # Freeze normal weights and train on alpha weights
+            model = freeze_weights(model, freeze=True)
+            train_epoch(train_loader_a, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
+            model = freeze_weights(model, freeze=False)
+            # Freeze alpha weights and train on normal weights
+            model = freeze_alpha(model, freeze=True)
+            train_epoch(train_loader_w, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
+            model = freeze_alpha(model, freeze=False)
+        else:
+            train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
 
         print('========= architecture =========')
         if hasattr(model, 'module'):
@@ -695,6 +728,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
     model.train()
 
     end = time.time()
+
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -891,6 +925,20 @@ def accuracy(output, target, topk=(1,)):
             correct_k = correct[:k].contiguous().view(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
+
+# MR
+def freeze_alpha(model, freeze=True):
+    for name, param in model.named_parameters():
+        if 'alpha' in name:
+            param.requires_grad = not freeze
+    return model
+
+# MR
+def freeze_weights(model, freeze=True):
+    for name, param in model.named_parameters():
+        if not 'alpha' in name:
+            param.requires_grad = not freeze
+    return model
 
 # MR
 def get_data_table(arch):
