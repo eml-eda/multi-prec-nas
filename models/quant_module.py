@@ -204,6 +204,7 @@ class LearnedClippedLinearQuantizeSTE(torch.autograd.Function):
         # Straight-through estimator for the scale factor calculation
         return grad_input, grad_alpha, None, None, None
 
+
 # DJP (w.r.t Manuele's code I changed inplace to false to avoid error)
 class LearnedClippedLinearQuantization(nn.Module):
     def __init__(self, num_bits, init_act_clip_val=6, dequantize=True, inplace=False):
@@ -552,11 +553,11 @@ class QuantMixActivChanConv2d(nn.Module):
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1] * in_shape[-2], dtype=torch.float)
         self.size_product.copy_(tmp)
-        #import pdb; pdb.set_trace()
         if not self.first_layer:
             out = self.mix_activ(input)
             out = self.mix_weight(out)
         else:
+            out = _channel_asym_min_max_quantize.apply(input, 8)
             out = self.mix_weight(input)
         return out
 
@@ -793,7 +794,11 @@ class SharedMultiPrecConv2d(nn.Module):
         self.hard_prune = False
         self.prune = 0 in bits
         self.cout = outplane
-        self.param_size = inplane * outplane * kwargs['kernel_size'] / kwargs['groups'] * 1e-6
+        if isinstance(kwargs['kernel_size'], tuple):
+            kernel_size = kwargs['kernel_size'][0] * kwargs['kernel_size'][1]
+        else:
+            kernel_size = kwargs['kernel_size'] * kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
         self.alpha_weight = Parameter(torch.Tensor(len(self.bits), self.cout))
         self.alpha_init = kwargs.pop('alpha_init', 'same')
         if self.alpha_init == 'same' or self.alpha_init is None:
@@ -1115,8 +1120,8 @@ class MixActivChanConv2d(nn.Module):
         tmp = torch.tensor(self.filter_size * in_shape[-1] * in_shape[-2], dtype=torch.float)
         self.size_product.copy_(tmp)
         out = self.mix_activ(input, temp, is_hard)
-        out = self.mix_weight(out, temp, is_hard)
-        return out
+        out, w_complexity = self.mix_weight(out, temp, is_hard)
+        return out, w_complexity
 
     def complexity_loss(self):
         if not self.first_layer:

@@ -51,7 +51,7 @@ class DS_CNN(nn.Module):
         self.model = nn.Sequential(
             # first_layer=True removes the ReLU activation
             conv_func(1, 64, abits=archas[0], wbits=archws[0], 
-                        kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, first_layer=False, **kwargs), # 1
+                        kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, first_layer=True, **kwargs), # 1
             #conv_func(1, 64, abits=archas[0], wbits=archws[0], 
             #            kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, **kwargs), # 1
             nn.BatchNorm2d(64, affine=bnaff),
@@ -86,26 +86,60 @@ class DS_CNN(nn.Module):
         x = x if self.qtz_fc else x.view(x.size(0), -1)
         x = self.fc(x)[:, :, 0, 0] if self.qtz_fc else self.fc(x)
         return x
-
+    
     def fetch_arch_info(self):
         sum_bitops, sum_bita, sum_bitw = 0, 0, 0
+        peak_wbit = 0
         layer_idx = 0
-        for m in self.modules():
+        for layer_name, m in self.named_modules():
             if isinstance(m, self.conv_func):
                 size_product = m.size_product.item()
                 memory_size = m.memory_size.item()
-                bitops = size_product * m.abits * m.wbit
-                bita = m.memory_size.item() * m.abits
-                bitw = m.param_size * m.wbit
-                #weight_shape = list(m.conv.weight.shape)
-                #print('idx {} with shape {}, bitops: {:.3f}M * {} * {}, memory: {:.3f}K * {}, '
-                #      'param: {:.3f}M * {}'.format(layer_idx, weight_shape, size_product, m.abit,
-                #                                   m.wbit, memory_size, m.abit, m.param_size, m.wbit))
-                sum_bitops += bitops
-                sum_bita += bita
-                sum_bitw += bitw
-                layer_idx += 1
-        return sum_bitops, sum_bita, sum_bitw
+                if isinstance(m, qm.QuantMultiPrecActivConv2d):
+                    for name, params in m.state_dict().items():
+                        full_name = name
+                        name = name.split('.')[-1]
+                        if name == 'alpha_activ':
+                            abits = m.abits[torch.argmax(params, dim=0).item()]
+                        elif name == 'alpha_weight':
+                            wbits = [m.wbits[prec] for prec in torch.argmax(params, dim=0).tolist()]
+                    wbit_eff = sum(wbits) / len(wbits)
+                    bitops = size_product * abits * wbit_eff
+                    bita = m.memory_size.item() * abits
+                    bitw = m.param_size * wbit_eff
+                    sum_bitops += bitops
+                    sum_bita += bita
+                    sum_bitw += bitw
+                    peak_wbit = max(peak_wbit, bitw)
+                    if peak_wbit == bitw:
+                        peak_layer = layer_name
+                #elif isinstance(m, qm.QuantMixActivChanConv2d):
+                #    import pdb; pdb.set_trace()
+                #    bitops = size_product * m.abits * m.wbit
+                #    bita = m.memory_size.item() * m.abits
+                #    bitw = m.param_size * m.wbit
+                #    sum_bitops += bitops
+                #    sum_bita += bita
+                #    sum_bitw += bitw
+                #    peak_wbit = max(peak_wbit, bitw)
+                #    if peak_wbit == bitw:
+                #        peak_layer = layer_name
+                else:
+                    bitops = size_product * m.abits * m.wbit
+                    bita = m.memory_size.item() * m.abits
+                    bitw = m.param_size * m.wbit
+                    #weight_shape = list(m.conv.weight.shape)
+                    #print('idx {} with shape {}, bitops: {:.3f}M * {} * {}, memory: {:.3f}K * {}, '
+                    #      'param: {:.3f}M * {}'.format(layer_idx, weight_shape, size_product, m.abit,
+                    #                                   m.wbit, memory_size, m.abit, m.param_size, m.wbit))
+                    sum_bitops += bitops
+                    sum_bita += bita
+                    sum_bitw += bitw
+                    peak_wbit = max(peak_wbit, bitw)
+                    if peak_wbit == bitw:
+                        peak_layer = layer_name
+                    layer_idx += 1
+        return sum_bitops, sum_bita, sum_bitw, peak_layer, peak_wbit
 
 # MR
 def quantdscnn_fp(arch_cfg_path, **kwargs):
@@ -134,7 +168,7 @@ def quantdscnn_w4a8(arch_cfg_path, **kwargs):
 # MR
 def quantdscnn_w2a8(arch_cfg_path, **kwargs):
     # This precisions can be whatever
-    archas, archws = [2] * 9, [2] * 9
+    archas, archws = [8] * 9, [2] * 9
     #assert len(archas) == 10
     #assert len(archws) == 10
     return DS_CNN(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='fixed', **kwargs)

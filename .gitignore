@@ -4,3 +4,4 @@
 log*
 data/
 sync_wandb.sh
+*.png
