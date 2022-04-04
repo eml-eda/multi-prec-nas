@@ -13,7 +13,7 @@ arch="res18_w248a8_chan_mp"
 #arch="res8_fp"
 #arch="res18_w2a8"
 #arch="res8_w248a8_chan"
-#arch="res18_fp"
+arch="res18_fp"
 project="multi-Precision-nas"
 
 #tags="warmup"
