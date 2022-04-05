@@ -40,6 +40,28 @@ def fc(conv_func, in_planes, out_planes, stride=1, groups = 1, search_fc=None, *
     return conv_func(in_planes, out_planes, kernel_size=1, groups = groups, stride=stride,
                      padding=0, bias=False, fc=search_fc, **kwargs)
 
+# MR
+class Backbone(nn.Module):
+    def __init__(self, conv_func, input_size, bnaff, **kwargs):
+        super().__init__()
+        self.bb_1 = BasicBlockGumbel(conv_func, 16, 16, stride=1,
+            bnaff=True, **kwargs)
+        self.bb_2 = BasicBlockGumbel(conv_func, 16, 32, stride=2,
+            bnaff=True, **kwargs)
+        self.bb_3 = BasicBlockGumbel(conv_func, 32, 64, stride=2,
+            bnaff=True, **kwargs)
+        self.pool = nn.AvgPool2d(kernel_size=4)
+    
+    def forward(self, x, temp, is_hard):
+        w_complexity = 0
+        x, w_comp = self.bb_1(x, temp, is_hard)
+        w_complexity += w_comp
+        x, w_comp = self.bb_2(x, temp, is_hard)
+        w_complexity += w_comp
+        x, w_comp = self.bb_3(x, temp, is_hard)
+        w_complexity += w_comp
+        x = self.pool(x)
+        return x, w_complexity
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -73,6 +95,43 @@ class BasicBlock(nn.Module):
 
         return out
 
+class BasicBlockGumbel(nn.Module):
+    expansion = 1
+
+    def __init__(self, conv_func, inplanes, planes, stride=1,
+                downsample=None, bnaff=True, **kwargs):
+        super().__init__()
+        #self.bn0 = nn.BatchNorm2d(inplanes, affine=bnaff)
+        self.conv1 = conv3x3(conv_func, inplanes, planes, stride, **kwargs)
+        self.bn1 = nn.BatchNorm2d(planes, affine=bnaff)
+        self.conv2 = conv3x3(conv_func, planes, planes, **kwargs)
+        self.bn2 = nn.BatchNorm2d(planes)
+        if stride != 1 or inplanes != planes:
+            self.downsample = conv_func(inplanes, planes, kernel_size=1,
+                stride=stride,  groups=1, bias=False, **kwargs)
+            self.bn_ds = nn.BatchNorm2d(planes)
+
+    def forward(self, x, temp, is_hard):
+        #out = self.bn0(x)
+        if self.downsample is not None:
+            residual = x
+        else:
+            residual = x
+
+        out, w_complexity1 = self.conv1(x, temp, is_hard)
+        out = self.bn1(out)
+        out, w_complexity2 = self.conv2(out, temp, is_hard)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            residual, w_complexity_ds = self.downsample(residual, temp, is_hard)
+            residual = self.bn_ds(residual)
+        else:
+            w_complexity_ds = 0
+
+        out += residual
+
+        return out, w_complexity1 + w_complexity2 + w_complexity_ds
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -214,8 +273,8 @@ class ResNet(nn.Module):
             if isinstance(m, self.conv_func):
                 loss += m.complexity_loss()
                 size_product += [m.size_product]
-        normalizer = size_product[0].item()
-        loss /= normalizer
+        #normalizer = size_product[0].item()
+        #loss /= normalizer
         return loss
 
     def fetch_best_arch(self):
@@ -245,7 +304,7 @@ class ResNet(nn.Module):
 
 class TinyMLResNet(nn.Module):
 
-    def __init__(self, block, conv_func, layers, search_fc=None, input_size = 32, num_classes=1000,
+    def __init__(self, block, conv_func, search_fc=None, input_size=32, num_classes=1000,
                  bnaff=True, **kwargs):
         if 'abits' in kwargs:
             print('abits: {}'.format(kwargs['abits']))
@@ -259,22 +318,24 @@ class TinyMLResNet(nn.Module):
         else:
             self.search_fc = False
         super().__init__()
+        self.gumbel = kwargs.get('gumbel', False)
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, groups = 1, padding=3, bias=False)
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, groups = 1, padding=1, bias=False)
         self.conv1 = conv3x3(conv_func, 3, 16, stride=1, groups=1, **kwargs)
         self.bn1 = nn.BatchNorm2d(16)
         self.relu = nn.ReLU(inplace=True)
+        self.model = Backbone(conv_func, input_size, bnaff, **kwargs)
         #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(
-            block, conv_func, 16, layers[0], bnaff=bnaff, **kwargs)
-        self.layer2 = self._make_layer(
-            block, conv_func, 32, layers[1], stride=2, groups = 1, bnaff=bnaff, **kwargs)
-        self.layer3 = self._make_layer(
-            block, conv_func, 64, layers[2], stride=2, groups = 1, bnaff=bnaff, **kwargs)
+        #self.layer1 = self._make_layer(
+        #    block, conv_func, 16, layers[0], bnaff=bnaff, **kwargs)
+        #self.layer2 = self._make_layer(
+        #    block, conv_func, 32, layers[1], stride=2, groups = 1, bnaff=bnaff, **kwargs)
+        #self.layer3 = self._make_layer(
+        #    block, conv_func, 64, layers[2], stride=2, groups = 1, bnaff=bnaff, **kwargs)
         #self.avgpool = nn.AvgPool2d(int(input_size/(2**5)))
-        self.avgpool = nn.AvgPool2d(kernel_size=4)
+        #self.avgpool = nn.AvgPool2d(kernel_size=4)
         if self.search_fc:
-            self.fc = fc(conv_func, 64 * block.expansion, num_classes, search_fc=self.search_fc, **kwargs)
+            self.fc = fc(conv_func, 64*block.expansion, num_classes, search_fc=self.search_fc, **kwargs)
         else:
             self.fc = nn.Linear(64 * block.expansion, num_classes, bias=False)
 
@@ -306,23 +367,32 @@ class TinyMLResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
-        x = self.conv1(x)
-        #x = self.maxpool(x)
+    def forward(self, x, temp, is_hard):
+        w_complexity = 0
+        x, w_comp = self.conv1(x, temp, is_hard)
+        w_complexity += w_comp
         x = self.bn1(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
+        #x = self.layer1(x)
+        #x = self.layer2(x)
+        #x = self.layer3(x)
+        x, w_comp = self.model(x, temp, is_hard)
+        w_complexity += w_comp
 
-        x = self.relu(x)
+        #x = self.relu(x)
         #assert x.shape[2] == 7
         #assert x.shape[3] == 7
-        x = self.avgpool(x)
+        #x = self.avgpool(x)
         x = x if self.search_fc else x.view(x.size(0), -1)
-        x = self.fc(x)[:, :, 0, 0] if self.search_fc else self.fc(x)
+        #x = self.fc(x)[:, :, 0, 0] if self.search_fc else self.fc(x)
 
-        return x
+        if self.search_fc:
+            x, w_comp = self.fc(x, temp, is_hard)
+            w_complexity += w_comp
+            return x[:, :, 0, 0], w_complexity
+        else:
+            x = self.fc(x)
+            return x, w_complexity
 
     def complexity_loss(self):
         size_product = []
@@ -418,7 +488,7 @@ def mixres50_w1234a234(**kwargs):
 
 # MR
 def mixres8_w0248a8_multiprec(**kwargs):
-    return TinyMLResNet(BasicBlock, qm.MultiPrecActivConv2d, [1, 1, 1], search_fc='multi', wbits=[0, 2, 4, 8], abits=[8],
+    return TinyMLResNet(BasicBlock, qm.MultiPrecActivConv2d, search_fc='multi', wbits=[0, 2, 4, 8], abits=[8],
                   share_weight=True, **kwargs)
 
 # MR

@@ -35,6 +35,8 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+parser.add_argument('--arch-data-split', type=float, default=None, 
+                    help='Split of the data to use for the update of alphas')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                     choices=model_names,
                     help='model architecture: ' +
@@ -53,6 +55,8 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
 parser.add_argument('--warmup', default=0, type=int,
                     help='number of warmup epochs'
                         '(default: 0 -> no warmup)')
+parser.add_argument('--warmup-8bit', action='store_true', default=False,
+                    help='Use model pretrained on 8-bit as starting point')
 parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
@@ -80,6 +84,13 @@ regularizer_targets = ['ops', 'weights']
 parser.add_argument('--regularization-target', '--rt', type=str,
                     choices=regularizer_targets,
                     help=f'regularization target: {*regularizer_targets,}')
+parser.add_argument('--gumbel-softmax', dest='gumbel_softmax', action='store_true', default=False,
+                    help='use gumbel-softmax instead of plain softmax')
+parser.add_argument('--no-gumbel-softmax', dest='gumbel_softmax', action='store_false', default=True,
+                    help='use plain softmax instead of gumbel-softmax')
+parser.add_argument('--hard-gs', action='store_true', default=False, help='use hard gumbel-softmax')
+parser.add_argument('--temperature', default=5, type=float, help='Initial temperature value')
+parser.add_argument('--anneal-temp', action='store_true', default=False, help='anneal temperature')
 parser.add_argument('-p', '--print-freq', default=100, type=int,
                     metavar='N', help='print frequency (default: 100)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
@@ -262,10 +273,10 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             train_sampler = None
 
-        trainset = torchvision.datasets.CIFAR10(root=args.data.parent.parent / 'cifar10', train=True,
+        trainset = torchvision.datasets.CIFAR10(root=args.data, train=True,
                                                 download=True, transform=transform_train)
 
-        testset = torchvision.datasets.CIFAR10(root=args.data.parent.parent / 'cifar10/', train=False,
+        testset = torchvision.datasets.CIFAR10(root=args.data, train=False,
                                                download=True, transform=transform_test)
         train_loader = torch.utils.data.DataLoader(
             trainset, batch_size=args.batch_size, shuffle=(train_sampler is None),
@@ -373,14 +384,14 @@ def main_worker(gpu, ngpus_per_node, args):
         print('{}: {}'.format(key, value))
 
     # If warmup is enabled check if pretrained model exists
-    if args.warmup != 0:
-        warmup_pretrained_checkpoint = args.data.parent / ('warmup_' + str(args.warmup) + '.pth.tar')
+    if args.warmup != 0 and not args.warmup_8bit:
+        warmup_pretrained_checkpoint = args.data.parent / 'saved_models' / ('warmup_' + str(args.warmup) + '.pth.tar')
         if warmup_pretrained_checkpoint.exists():
             print(f"=> loading pretrained model '{warmup_pretrained_checkpoint}'")
             checkpoint = torch.load(warmup_pretrained_checkpoint)
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-            arch_optimizer.load_state_dict(checkpoint['arch_optimizer'])
+            #arch_optimizer.load_state_dict(checkpoint['arch_optimizer'])
         else:
             print(f"=> no pretrained model found at '{warmup_pretrained_checkpoint}'")
             print(f"=> warmup model for '{args.warmup}' epochs")
@@ -389,7 +400,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 if 'alpha' in name:
                     param.requires_grad = False
             # Warmup model
-            warmup_best_epoch, warmup_best_acc1 = train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Warmup')
+            warmup_best_epoch, warmup_best_acc1 = \
+                train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Warmup')
             
             print(f'Best Acc@1 {warmup_best_acc1} @ epoch {warmup_best_epoch}')
 
@@ -397,6 +409,10 @@ def main_worker(gpu, ngpus_per_node, args):
             for name, param in model.named_parameters():
                 if 'alpha' in name:
                     param.requires_grad = True
+    elif args.warmup_8bit:
+        pretrained_checkpoint = args.data.parent / 'saved_models' / ('warmup_8bit.pth.tar')
+        state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
 
@@ -539,16 +555,44 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Search', train_sampler=None):
     best_epoch = args.start_epoch
     best_acc1 = 0
+    temp = args.temperature
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        #adjust_learning_rate(optimizer, arch_optimizer, epoch, args)
-
-        # Alternative scheduling from https://github.com/kuangliu/pytorch-cifar
-        scheduler.step()
 
         # train for one epoch
-        train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, scope=scope)
+        #train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, scope=scope)
+
+        # If not None split data accordingly to args.arch_data_split
+        # (1 - args.arch_data_split) is the fraction of training data used for normal weights
+        # (args.arch_data_split) is the fraction of training data used for alpha weights
+        if args.arch_data_split is not None:
+            # Randomly split data
+            data = train_loader.dataset
+            len_data_a = int(len(data) * args.arch_data_split)
+            len_data_w = len(data) - len_data_a
+            data_w, data_a = torch.utils.data.random_split(data, [len_data_w, len_data_a])
+            train_loader_w = torch.utils.data.DataLoader(
+                data_w, batch_size=None, shuffle=True, 
+                num_workers=args.workers, pin_memory=True)
+            train_loader_a = torch.utils.data.DataLoader(
+                data_a, batch_size=None, shuffle=True, 
+                num_workers=args.workers, pin_memory=True)
+            # Freeze normal weights and train on alpha weights
+            model = freeze_weights(model, freeze=True)
+            train_epoch(train_loader_a, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
+            model = freeze_weights(model, freeze=False)
+            # Freeze alpha weights and train on normal weights
+            model = freeze_alpha(model, freeze=True)
+            train_epoch(train_loader_w, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
+            model = freeze_alpha(model, freeze=False)
+        else:
+            train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
+
+        #adjust_learning_rate(optimizer, arch_optimizer, epoch, args)
+        # Alternative scheduling from https://github.com/kuangliu/pytorch-cifar
+        scheduler.step()
 
         print('========= architecture =========')
         if hasattr(model, 'module'):
@@ -563,7 +607,11 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
             print('{}: {}'.format(key, value))
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, epoch, args, scope=scope)
+        acc1 = validate(val_loader, model, criterion, epoch, args, temp, scope=scope)
+
+        # Anneal temperature 
+        if args.anneal_temp and scope == 'Search':
+            temp = anneal_temperature(temp)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -628,6 +676,18 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                         #wandb.log({'Epoch': epoch})
                         wandb.log(log_dict)
 
+        # Debug: plot for a single layer evolution of alphas and softmax
+        if args.debug and scope == 'Search':
+            alpha = model.state_dict()['model.bb_1.conv0.mix_weight.alpha_weight'].clone().detach().cpu()
+            sw = F.softmax(alpha/temp, dim=0).clone().detach().cpu().numpy()
+            alpha = alpha.numpy()
+            log_dict = {'Epoch': epoch}
+            for ch in range(alpha.shape[1]):
+                for prec in range(alpha.shape[0]):
+                    log_dict['alpha/ch'+str(ch)+'-prec'+str(prec)] = alpha[prec, ch]
+                    log_dict['softmax/ch'+str(ch)+'-prec'+str(prec)] = sw[prec, ch]
+            wandb.log(log_dict)
+    
         # Debug: bar-plot with fraction of chosen precisions for each layer at each epoch
         if args.debug and scope == 'Search':
             discrete_arch = sample_arch(model.state_dict())
@@ -647,10 +707,11 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
             wandb.log({'table_w': wandb_table_w})
     return best_epoch, best_acc1
 
-def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, scope='Search'):
+def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope='Search'):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
+    complexity_losses = AverageMeter('CLoss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     curr_lr = optimizer.param_groups[0]['lr']
@@ -675,7 +736,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output = model(images)
+        output, loss_complexity = model(images, temp, args.hard_gs)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -685,13 +746,15 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         top5.update(acc5[0], images.size(0))
         # complexity penalty
         if args.complexity_decay != 0 and scope == 'Search':
-            if hasattr(model, 'module'):
-                loss_complexity = args.complexity_decay * model.module.complexity_loss()
-            else:
-                loss_complexity = args.complexity_decay * model.complexity_loss()
+            #if hasattr(model, 'module'):
+            #    loss_complexity = args.complexity_decay * model.module.complexity_loss()
+            #else:
+            #    loss_complexity = args.complexity_decay * model.complexity_loss()
+            loss_complexity = args.complexity_decay * loss_complexity
             loss += loss_complexity
         else:
             loss_complexity = 0
+        complexity_losses.update(loss_complexity.item(), images.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -725,7 +788,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
                 scope + "_Train/lra": curr_lra
             })
 
-def validate(val_loader, model, criterion, epoch, args, scope='Search'):
+def validate(val_loader, model, criterion, epoch, args, temp, scope='Search'):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -746,7 +809,7 @@ def validate(val_loader, model, criterion, epoch, args, scope='Search'):
             target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
-            output = model(images)
+            output, _ = model(images, temp, args.hard_gs)
             loss = criterion(output, target)
 
             # measure accuracy and record loss
@@ -841,6 +904,10 @@ def adjust_learning_rate(optimizer, arch_optimizer, epoch, args):
     for param_group in arch_optimizer.param_groups:
         param_group['lr'] = lra
 
+def anneal_temperature(temperature):
+    # FbNetV2-like annealing
+    return temperature * math.exp(-0.045)
+    #return temperature * 1
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
@@ -857,6 +924,20 @@ def accuracy(output, target, topk=(1,)):
             correct_k = correct[:k].contiguous().view(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
+
+# MR
+def freeze_alpha(model, freeze=True):
+    for name, param in model.named_parameters():
+        if 'alpha' in name:
+            param.requires_grad = not freeze
+    return model
+
+# MR
+def freeze_weights(model, freeze=True):
+    for name, param in model.named_parameters():
+        if not 'alpha' in name:
+            param.requires_grad = not freeze
+    return model
 
 # MR
 def get_data_table(arch):

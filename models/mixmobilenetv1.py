@@ -296,8 +296,8 @@ class TinyMLMobilenetV1(nn.Module):
             if isinstance(m, self.conv_func):
                 loss += m.complexity_loss()
                 size_product += [m.size_product]
-        normalizer = size_product[0].item()
-        loss /= normalizer
+        #normalizer = size_product[0].item()
+        #loss /= normalizer
         return loss
 
     def fetch_best_arch(self):
