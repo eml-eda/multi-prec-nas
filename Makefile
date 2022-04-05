@@ -17,12 +17,9 @@ kws-init:
 	mkdir -p kws/data
 
 vww-init:
-	mkdir -p vww/log
-	mkdir -p vww/saved_models
-	mkdir -p vww/data
-	wget https://www.silabs.com/public/files/github/machine_learning/benchmarks/datasets/vw_coco2014_96.tar.gz -P vww/data
-	tar -xvf vww/data/vw_coco2014_96.tar.gz -C vww/data
-	rm vww/data/vw_coco2014_96.tar.gz
+	wget https://www.silabs.com/public/files/github/machine_learning/benchmarks/datasets/vw_coco2014_96.tar.gz -P visual_wake_words
+	tar -xvf visual_wake_words/vw_coco2014_96.tar.gz -C visual_wake_words
+	rm visual_wake_words/vw_coco2014_96.tar.gz
 
 clean:
 	rm -rf data

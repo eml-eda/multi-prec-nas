@@ -11,7 +11,7 @@ __all__ = [
    'quantmobilenetv1_w2a8', 'quantmobilenetv1_w4a8', 'quantmobilenetv1_w8a8',
    'quantmobilenetv1_w8a8_pretrained',
    'quantmobilenetv1_w0248a8_multiprec', 'quantmobilenetv1_w248a8_multiprec',
-   'quantmobilenetv1_w248a8_chan', 'quantmobilenetv1_w248a8_chan_mp'
+   'quantmobilenetv1_w248a8_chan', 
 ]
 
 # AB
@@ -421,27 +421,27 @@ def quantmobilenetv1_w248a8_multiprec(arch_cfg_path, **kwargs):
     return model
 
 # MR
-def quantmobilenetv1_w248a8_chan(arch_cfg_path, **kwargs):
-    wbits, abits = [2, 4, 8], [8]
-    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
-    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
-    archas = [abits[a] for a in best_arch['alpha_activ']]
-    archws = [wbits[w] for w in best_arch['alpha_weight']]
-    #assert len(archas) == 21 # 21 insead of 19 because fc activations are also quantized (the first element [8] is dummy)
-    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized
-    model = TinyMLMobilenetV1(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
-    if kwargs['fine_tune']:
-        # Load all weights
-        state_dict = torch.load(arch_cfg_path)['state_dict']
-        model.load_state_dict(state_dict, strict=False)
-    else:
-        # Load all weights
-        state_dict = torch.load(arch_cfg_path)['state_dict']
-        model.load_state_dict(state_dict, strict=False)
-    return model
+#def quantmobilenetv1_w248a8_chan(arch_cfg_path, **kwargs):
+#    wbits, abits = [2, 4, 8], [8]
+#    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
+#    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
+#    archas = [abits[a] for a in best_arch['alpha_activ']]
+#    archws = [wbits[w] for w in best_arch['alpha_weight']]
+#    #assert len(archas) == 21 # 21 insead of 19 because fc activations are also quantized (the first element [8] is dummy)
+#    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized
+#    model = TinyMLMobilenetV1(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+#    if kwargs['fine_tune']:
+#        # Load all weights
+#        state_dict = torch.load(arch_cfg_path)['state_dict']
+#        model.load_state_dict(state_dict, strict=False)
+#    else:
+#        # Load all weights
+#        state_dict = torch.load(arch_cfg_path)['state_dict']
+#        model.load_state_dict(state_dict, strict=False)
+#    return model
 
-# MR
-def quantmobilenetv1_w248a8_chan_mp(arch_cfg_path, **kwargs):
+# MR, as mp
+def quantmobilenetv1_w248a8_chan(arch_cfg_path, **kwargs):
     wbits, abits = [2, 4, 8], [8]
     name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
     best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)

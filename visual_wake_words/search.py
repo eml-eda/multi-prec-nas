@@ -7,8 +7,9 @@ import shutil
 import sys
 import time
 import warnings
+sys.path.append('..')
 
-sys.path.insert(1, os.path.join(sys.path[0], '..'))
+#sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 import numpy as np
 
@@ -209,7 +210,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataset == 'coco2014_96':
         num_classes = 2
         
-        data_dir = args.data.parent.parent.parent / 'vw_coco2014_96'
+        data_dir = args.data.parent.parent / 'vw_coco2014_96'
 
         dataset = datasets.ImageFolder(
             data_dir,
@@ -242,7 +243,7 @@ def main_worker(gpu, ngpus_per_node, args):
         import tensorflow as tf
         num_classes = 2
 
-        data_dir = args.data.parent.parent.parent / 'vw_coco2014_96'
+        data_dir = args.data.parent.parent / 'vw_coco2014_96'
         datagen = tf.keras.preprocessing.image.ImageDataGenerator(
             rotation_range=10,
             width_shift_range=0.05,
@@ -384,7 +385,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print('{}: {}'.format(key, value))
 
     # If warmup is enabled check if pretrained model exists
-    if args.warmup != 0 and args.warmup_8bit:
+    if args.warmup != 0 and not args.warmup_8bit:
         warmup_pretrained_checkpoint = args.data.parent / ('warmup_' + str(args.warmup) + '.pth.tar')
         if warmup_pretrained_checkpoint.exists():
             print(f"=> loading pretrained model '{warmup_pretrained_checkpoint}'")
@@ -557,8 +558,8 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
     temp = args.temperature
 
     # Plot gradients
-    if args.visualization and args.debug:
-        wandb.watch(model, log='all')
+    #if args.visualization and args.debug:
+    #    wandb.watch(model, log='all')
 
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -679,16 +680,16 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                         wandb.log(log_dict)
 
         # Debug: plot for a single layer evolution of alphas and softmax
-        if args.debug and scope == 'Search':
-            alpha = model.state_dict()['model.bb_1.conv0.mix_weight.alpha_weight'].clone().detach().cpu()
-            sw = F.softmax(alpha/temp, dim=0).clone().detach().cpu().numpy()
-            alpha = alpha.numpy()
-            log_dict = {'Epoch': epoch}
-            for ch in range(alpha.shape[1]):
-                for prec in range(alpha.shape[0]):
-                    log_dict['alpha/ch'+str(ch)+'-prec'+str(prec)] = alpha[prec, ch]
-                    log_dict['softmax/ch'+str(ch)+'-prec'+str(prec)] = sw[prec, ch]
-            wandb.log(log_dict)
+        #if args.debug and scope == 'Search':
+        #    alpha = model.state_dict()['model.bb_1.conv0.mix_weight.alpha_weight'].clone().detach().cpu()
+        #    sw = F.softmax(alpha/temp, dim=0).clone().detach().cpu().numpy()
+        #    alpha = alpha.numpy()
+        #    log_dict = {'Epoch': epoch}
+        #    for ch in range(alpha.shape[1]):
+        #        for prec in range(alpha.shape[0]):
+        #            log_dict['alpha/ch'+str(ch)+'-prec'+str(prec)] = alpha[prec, ch]
+        #            log_dict['softmax/ch'+str(ch)+'-prec'+str(prec)] = sw[prec, ch]
+        #    wandb.log(log_dict)
 
         # Debug: bar-plot with fraction of chosen precisions for each layer at each epoch
         if args.debug and scope == 'Search':

@@ -3,5 +3,7 @@
 *.tar
 log*
 data/
+*.jpg
 sync_wandb.sh
 *.png
+wandb/

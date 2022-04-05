@@ -757,7 +757,7 @@ class SharedMixQuantChanConv2d(nn.Module):
         mix_wbit = 0
         #self.alpha_weight = torch.nn.Parameter(clamp(self.alpha_weight, -100, +100))
         if not self.gumbel:
-            sw = F.softmax(self.alpha_weight, dim=0)
+            sw = F.softmax(self.alpha_weight / temp, dim=0)
         else:
             # If is_hard is True the output is one-hot
             sw = F.gumbel_softmax(self.alpha_weight, tau=temp, hard=is_hard, dim=0)
@@ -769,7 +769,7 @@ class SharedMixQuantChanConv2d(nn.Module):
             scaled_quant_weight = quant_weight * sw[i]
             mix_quant_weight.append(scaled_quant_weight)
             # Complexity
-            mix_wbit += sum(sw[i]) * bit
+            mix_wbit += sw[i] * bit
         if bias is not None:
             quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
         else:
