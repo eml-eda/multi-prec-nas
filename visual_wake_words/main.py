@@ -62,6 +62,8 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--wd', '--weight-decay', default=5e-4, type=float,
                     metavar='W', help='weight decay (default: 5e-4)',
                     dest='weight_decay')
+parser.add_argument('--complexity-decay', '--cd', default=0, type=float,
+                    metavar='W', help='complexity decay (default: 0)')
 parser.add_argument('-p', '--print-freq', default=100, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
@@ -106,7 +108,7 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    complexity_decay = args.data.split('_')[-1]
+    complexity_decay = args.complexity_decay
 
     if args.visualization:
         wandb.init(
@@ -179,7 +181,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataset == 'coco2014_96':
         num_classes = 2
 
-        data_dir = args.data.parent.parent.parent / 'vw_coco2014_96'
+        data_dir = args.data.parent.parent / 'vw_coco2014_96'
         dataset = datasets.ImageFolder(
             data_dir,
             transforms.Compose([
@@ -211,7 +213,7 @@ def main_worker(gpu, ngpus_per_node, args):
         import tensorflow as tf
         num_classes = 2
 
-        data_dir = args.data.parent.parent.parent / 'vw_coco2014_96'
+        data_dir = args.data.parent.parent / 'vw_coco2014_96'
         datagen = tf.keras.preprocessing.image.ImageDataGenerator(
             rotation_range=10,
             width_shift_range=0.05,

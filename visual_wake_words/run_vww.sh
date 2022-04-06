@@ -30,7 +30,7 @@ if [[ "$3" == "search" ]]; then
         -d coco2014_96_tf --arch-data-split 0.2 \
         --epochs 70 --step-epoch 10 -b 32 --warmup ${warmup} --warmup-8bit \
         --lr 0.001 --lra 0.01 --wd 1e-4 \
-        --ai same --cd $strength --rt weights \
+        --ai same --cd ${strength} --rt weights \
         --seed 42 --gpu 0 \
         --no-gumbel-softmax --temperature 5 --anneal-temp \
         --visualization -pr ${project} --tags ${tags} --debug | tee ${arch}/model_${strength}/log_search_${strength}.txt
@@ -38,9 +38,9 @@ fi
 
 if [[ "$4" == "ft" ]]; then
     echo Fine-Tune
-    python3 main.py data/vw_coco2014_96 -a quant${arch} -d coco2014_96_tf \
+    python3 main.py ${arch}/model_${strength} -a quant${arch} -d coco2014_96_tf \
         --epochs 70 --step-epoch 10 -b 32 \
-        --lr 0.001 --wd 1e-4 \
+        --lr 0.001 --wd 1e-4 --cd ${strength} \
         --seed 42 --gpu 0 \
         --ac ${arch}/model_${strength}/arch_checkpoint.pth.tar -ft \
         --visualization -pr ${project} --tags ${tags} | tee ${arch}/model_${strength}/log_finetune_${strength}.txt
