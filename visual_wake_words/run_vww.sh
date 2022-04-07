@@ -10,8 +10,8 @@ path="/space/risso/multi_prec_exp"
 #arch="mobilenetv1_w8a8"
 #arch="mobilenetv1_w8a8_pretrained"
 #arch="mobilenetv1_w0248a8_multiprec"
-#arch="mobilenetv1_w248a8_multiprec"
-arch="mobilenetv1_w248a8_chan"
+arch="mobilenetv1_w248a8_multiprec"
+#arch="mobilenetv1_w248a8_chan"
 #arch="mobilenetv1_w248a8_chan_mp"
 project="multi-precision-nas_vww"
 
@@ -24,16 +24,21 @@ tags="init_same warmup reg_w"
 mkdir -p ${arch}
 mkdir -p ${arch}/model_${strength}
 
+#split=0.2
+split=0.0
+
 if [[ "$3" == "search" ]]; then
     echo Search
     python3 search.py ${arch}/model_${strength} -a mix${arch} \
-        -d coco2014_96_tf --arch-data-split 0.2 \
+        -d coco2014_96_tf --arch-data-split ${split} \
         --epochs 70 --step-epoch 10 -b 32 --warmup ${warmup} --warmup-8bit \
         --lr 0.001 --lra 0.01 --wd 1e-4 \
         --ai same --cd ${strength} --rt weights \
         --seed 42 --gpu 0 \
-        --no-gumbel-softmax --temperature 5 --anneal-temp \
+        --no-gumbel-softmax --temperature 1 \
         --visualization -pr ${project} --tags ${tags} --debug | tee ${arch}/model_${strength}/log_search_${strength}.txt
+        #--no-gumbel-softmax --temperature 5 --anneal-temp \
+        #--visualization -pr ${project} --tags ${tags} --debug | tee ${arch}/model_${strength}/log_search_${strength}.txt
 fi
 
 if [[ "$4" == "ft" ]]; then

@@ -574,7 +574,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
         # If not None split data accordingly to args.arch_data_split
         # (1 - args.arch_data_split) is the fraction of training data used for normal weights
         # (args.arch_data_split) is the fraction of training data used for alpha weights
-        if args.arch_data_split is not None:
+        if args.arch_data_split is not None and int(args.arch_data_split) != 0:
             # Randomly split data
             data = train_loader.dataset
             len_data_a = int(len(data) * args.arch_data_split)
