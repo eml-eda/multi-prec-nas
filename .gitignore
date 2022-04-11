@@ -7,3 +7,4 @@ data/
 sync_wandb.sh
 *.png
 wandb/
+dev_data/

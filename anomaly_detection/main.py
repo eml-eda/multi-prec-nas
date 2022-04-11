@@ -126,10 +126,8 @@ def main():
             dir = args.data
         )
         wandb.config.update(args)
-        wandb.define_metric('Train/Loss', summary='min')
-        wandb.define_metric('Train/Acc', summary='max')
-        wandb.define_metric('Test/Loss', summary='min')
-        wandb.define_metric('Test/Acc', summary='max')
+        wandb.define_metric('Train/Loss', summary='last')
+        wandb.define_metric('Test/Loss', summary='last')
 
 
     args.data = pathlib.Path(args.data)

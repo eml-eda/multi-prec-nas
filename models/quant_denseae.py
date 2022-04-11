@@ -7,6 +7,7 @@ from . import quant_module as qm
 # MR
 __all__ = [
    'quantdenseae_fp', 
+   'quantdenseae_w2a8', 'quantdenseae_w4a8', 'quantdenseae_w8a8',
 ]
 
 class TinyMLDenseAe(nn.Module):
@@ -67,6 +68,7 @@ class TinyMLDenseAe(nn.Module):
                     m.bias.data.zero_()
 
     def forward(self, x):
+        # 640 -> 128
         x = self.fc_0(x)
         x = self.bn_0(x)
         x = self.fc_1(x)
@@ -75,8 +77,12 @@ class TinyMLDenseAe(nn.Module):
         x = self.bn_2(x)
         x = self.fc_3(x)
         x = self.bn_3(x)
+
+        # 128 -> 8
         x = self.fc_4(x)
         x = self.bn_4(x)
+
+        # 8 -> 128
         x = self.fc_5(x)
         x = self.bn_5(x)
         x = self.fc_6(x)
@@ -85,6 +91,8 @@ class TinyMLDenseAe(nn.Module):
         x = self.bn_7(x)
         x = self.fc_8(x)
         x = self.bn_8(x)
+
+        # 128 -> 640
         x = self.fc_9(x)[:, :, 0, 0]
         return x
 
@@ -200,3 +208,24 @@ def quantdenseae_fp(arch_cfg_path, **kwargs):
     #assert len(archas) == 10
     #assert len(archws) == 10
     return TinyMLDenseAe(qm.FpConv2d, archws, archas, **kwargs)
+
+# MR
+def quantdenseae_w2a8(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 10, [2] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w4a8(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 10, [4] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w8a8(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 10, [8] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
