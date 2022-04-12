@@ -10,4 +10,5 @@ from .mixinception import *
 from .mixmobilenetv1 import *
 from .mixmobilenetv2 import *
 from .mixdscnn import *
+from .mixdenseae import *
 

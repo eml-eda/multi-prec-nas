@@ -28,6 +28,8 @@ elif model_name == 'resnet18':
     rnd_input = torch.randn(1, 3, 32, 32)
 elif model_name == 'dscnn':
     rnd_input = torch.randn(1, 1, 49, 10)
+elif model_name == 'denseae':
+    rnd_input = torch.randn(2, 640, 1, 1)
 else:
     raise ValueError(f'Unknown model name: {model_name}')
 with torch.no_grad():

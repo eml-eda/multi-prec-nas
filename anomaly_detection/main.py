@@ -128,6 +128,8 @@ def main():
         wandb.config.update(args)
         wandb.define_metric('Train/Loss', summary='last')
         wandb.define_metric('Test/Loss', summary='last')
+        wandb.define_metric('Test/AUC', summary='last')
+        wandb.define_metric('Test/pAUC', summary='last')
 
 
     args.data = pathlib.Path(args.data)
@@ -471,7 +473,6 @@ def test(data_dir, model, args):
     # Visualization
     if args.visualization:
         wandb.log({
-                "Epoch": epoch,
                 "Test/AUC": averaged_performance[0], 
                 "Test/pAUC": averaged_performance[1]
             })
