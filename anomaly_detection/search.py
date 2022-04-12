@@ -722,6 +722,7 @@ def validate(val_loader, model, criterion, epoch, args, temp, scope=None):
     return losses.avg
 
 def test(data_dir, model, args):
+    temp = args.temperature
     performance = []
     machine_id_list = get_machine_id_list_for_test(data_dir)
     for id_str in machine_id_list:

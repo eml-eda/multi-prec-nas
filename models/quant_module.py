@@ -405,7 +405,7 @@ class QuantMultiPrecActivConv2d(nn.Module):
         super(QuantMultiPrecActivConv2d, self).__init__()
         
         self.fine_tune = kwargs.pop('fine_tune', False)
-        self.first_layer = False
+        self.first_layer = kwargs.pop('first_layer', False)
         self.fc = fc
 
         self.abits = abits
@@ -454,8 +454,12 @@ class QuantMultiPrecActivConv2d(nn.Module):
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1] * in_shape[-2], dtype=torch.float)
         self.size_product.copy_(tmp)
-        out = self.mix_activ(input)
-        out = self.mix_weight(out)
+        if not self.first_layer:
+            out = self.mix_activ(input)
+            out = self.mix_weight(out)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8)
+            out = self.mix_weight(out) 
         return out
 
 # MR
@@ -558,7 +562,7 @@ class QuantMixActivChanConv2d(nn.Module):
             out = self.mix_weight(out)
         else:
             out = _channel_asym_min_max_quantize.apply(input, 8)
-            out = self.mix_weight(input)
+            out = self.mix_weight(out)
         return out
 
 

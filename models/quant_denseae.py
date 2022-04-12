@@ -8,6 +8,7 @@ from . import quant_module as qm
 __all__ = [
    'quantdenseae_fp', 
    'quantdenseae_w2a8', 'quantdenseae_w4a8', 'quantdenseae_w8a8',
+   'quantdenseae_w248a8_multiprec', 'quantdenseae_w248a8_chan',
 ]
 
 class TinyMLDenseAe(nn.Module):
@@ -202,6 +203,38 @@ def _load_alpha_state_dict(arch_path):
     return alpha_state_dict
 
 # MR
+def _load_alpha_state_dict_as_mp(arch_path, model):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    alpha_state_dict = dict()
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            alpha_state_dict[full_name] = params
+        elif name == 'alpha_weight':
+            mp_params = torch.tensor(model.state_dict()[full_name])
+            mp_params[0] = params[0]
+            mp_params[1] = params[1]
+            mp_params[2] = params[2]
+            alpha_state_dict[full_name] = mp_params
+
+    return alpha_state_dict
+
+# MR
+def _remove_alpha(state_dict):
+    weight_state_dict = copy.deepcopy(state_dict)
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            weight_state_dict.pop(full_name)
+        elif name == 'alpha_weight':
+            weight_state_dict.pop(full_name)
+
+    return weight_state_dict
+
+# MR
 def quantdenseae_fp(arch_cfg_path, **kwargs):
     # This precisions can be whatever
     archas, archws = [8] * 10, [8] * 10
@@ -229,3 +262,56 @@ def quantdenseae_w8a8(arch_cfg_path, **kwargs):
     #assert len(archas) == 10
     #assert len(archws) == 10
     return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+# qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
+def quantdenseae_w248a8_multiprec(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+
+    ## This block of code is only necessary to comply with the underlying EdMIPS code ##
+    best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w_ch in best_arch['alpha_weight']]
+    #if len(archws) == 20:
+        # Case of fixed-precision on last fc layer
+    #    archws.append(8)
+    #assert len(archas) == 21 # 21 insead of 19 because conv1 and fc activations are also quantized
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized 
+    ##
+    #import pdb; pdb.set_trace()
+    model = TinyMLDenseAe(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        state_dict = torch.load(arch_cfg_path)['state_dict']
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        # Load only alphas weights
+        alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model
+
+# MR, as mp
+def quantdenseae_w248a8_chan(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
+    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w in best_arch['alpha_weight']]
+    #assert len(archas) == 21 # 21 insead of 19 because fc activations are also quantized (the first element [8] is dummy)
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized
+    model = TinyMLDenseAe(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        checkpoint = torch.load(arch_cfg_path)
+        weight_state_dict = _remove_alpha(checkpoint['state_dict'])
+        model.load_state_dict(weight_state_dict, strict=False)
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    else:
+        # Load all weights
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        #state_dict = torch.load(arch_cfg_path)['state_dict']
+        #model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(alpha_state_dict, strict=False)
+        import pdb; pdb.set_trace()
+    return mode

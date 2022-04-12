@@ -70,6 +70,8 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--wd', '--weight-decay', default=5e-4, type=float,
                     metavar='W', help='weight decay (default: 5e-4)',
                     dest='weight_decay')
+parser.add_argument('--complexity-decay', '--cd', default=0, type=float,
+                    metavar='W', help='complexity decay (default: 0)')
 parser.add_argument('-p', '--print-freq', default=100, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
