@@ -32,7 +32,7 @@ class TinyMLDenseAe(nn.Module):
         super().__init__()
         self.gumbel = kwargs.get('gumbel', False)
         
-        self.fc_0 = fc(conv_func, input_size, 128, search_fc=self.search_fc, **kwargs)
+        self.fc_0 = fc(conv_func, input_size, 128, search_fc=self.search_fc, fix_qtz=True, **kwargs)
         self.bn_0 = nn.BatchNorm2d(128, affine=bnaff)
         self.fc_1 = fc(conv_func, 128, 128, search_fc=self.search_fc, **kwargs)
         self.bn_1 = nn.BatchNorm2d(128, affine=bnaff)

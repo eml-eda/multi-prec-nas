@@ -916,6 +916,8 @@ class MultiPrecActivConv2d(nn.Module):
         self.first_layer = False
         kwargs.pop('first_layer', None)
 
+        self.fix_qtz = kwargs.pop('fix_qtz', False)
+
         self.search_types = ['fixed', 'mixed', 'multi']
         if fc in self.search_types:
             self.fc = fc
@@ -966,7 +968,10 @@ class MultiPrecActivConv2d(nn.Module):
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1] * in_shape[-2], dtype=torch.float)
         self.size_product.copy_(tmp)
-        out = self.mix_activ(input, temp, is_hard)
+        if not self.fix_qtz:
+            out = self.mix_activ(input, temp, is_hard)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8)
         out, w_complexity = self.mix_weight(out, temp, is_hard)
         return out, w_complexity
 
@@ -1096,6 +1101,8 @@ class MixActivChanConv2d(nn.Module):
         self.first_layer = False
         kwargs.pop('first_layer', None)
 
+        self.fix_qtz = kwargs.pop('fix_qtz', False)
+
         self.fc = fc
         self.gumbel = kwargs.pop('gumbel', False)
 
@@ -1123,7 +1130,10 @@ class MixActivChanConv2d(nn.Module):
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1] * in_shape[-2], dtype=torch.float)
         self.size_product.copy_(tmp)
-        out = self.mix_activ(input, temp, is_hard)
+        if not self.fix_qtz:
+            out = self.mix_activ(input, temp, is_hard)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8) 
         out, w_complexity = self.mix_weight(out, temp, is_hard)
         return out, w_complexity
 

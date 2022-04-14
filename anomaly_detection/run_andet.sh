@@ -9,6 +9,7 @@ path="/space/risso/multi_prec_exp"
 #arch="denseae_w4a8"
 #arch="denseae_w2a8"
 arch="denseae_w248a8_multiprec"
+#arch="denseae_w248a8_chan"
 project="multi-precision-nas_andet"
 
 #tags="warmup"
@@ -45,7 +46,7 @@ if [[ "$4" == "ft" ]]; then
 else
     echo From-Scratch
     python3 main.py ${arch}/model_${strength} -a quant${arch} -d toy_car \
-        --epochs 100 --step-epoch 10 -b 512 \
+        --epochs 200 --step-epoch 10 -b 512 \
         --lr 0.001 --wd 0 \
         --gpu 0 \
         --ac ${arch}/model_${strength}/arch_checkpoint.pth.tar \

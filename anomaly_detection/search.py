@@ -466,17 +466,17 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
         # If not None split data accordingly to args.arch_data_split
         # (1 - args.arch_data_split) is the fraction of training data used for normal weights
         # (args.arch_data_split) is the fraction of training data used for alpha weights
-        if args.arch_data_split is not None and int(args.arch_data_split) != 0:
+        if args.arch_data_split is not None and float(args.arch_data_split) != 0.0:
             # Randomly split data
             data = train_loader.dataset
             len_data_a = int(len(data) * args.arch_data_split)
             len_data_w = len(data) - len_data_a
             data_w, data_a = torch.utils.data.random_split(data, [len_data_w, len_data_a])
             train_loader_w = torch.utils.data.DataLoader(
-                data_w, batch_size=None, shuffle=True, 
+                data_w, batch_size=args.batch_size, shuffle=True, 
                 num_workers=args.workers, pin_memory=True)
             train_loader_a = torch.utils.data.DataLoader(
-                data_a, batch_size=None, shuffle=True, 
+                data_a, batch_size=args.batch_size, shuffle=True, 
                 num_workers=args.workers, pin_memory=True)
             # Freeze normal weights and train on alpha weights
             model = freeze_weights(model, freeze=True)
@@ -745,7 +745,8 @@ def test(data_dir, model, args):
                     data = data.cuda(args.gpu, non_blocking=True)
 
                     # compute output
-                    pred, _ = model(data.view(data.shape[0], data.shape[1], 1, 1), temp, args.hard_gs).detach().cpu().numpy()
+                    pred, _ = model(data.view(data.shape[0], data.shape[1], 1, 1), temp, args.hard_gs)
+                    pred = pred.detach().cpu().numpy()
                     errors = np.mean(np.square(data.detach().cpu().numpy()-pred), axis=1)
                     y_pred[file_idx] = np.mean(errors)
 

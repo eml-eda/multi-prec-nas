@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import torch
 import torch.nn as nn
@@ -314,4 +315,4 @@ def quantdenseae_w248a8_chan(arch_cfg_path, **kwargs):
         #model.load_state_dict(state_dict, strict=False)
         model.load_state_dict(alpha_state_dict, strict=False)
         import pdb; pdb.set_trace()
-    return mode
+    return model
