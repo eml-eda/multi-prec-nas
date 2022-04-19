@@ -27,7 +27,7 @@ if [[ "$3" == "search" ]]; then
     split=0.2
     python3 search.py ${arch}/model_${strength} -a mix${arch} \
         -d toy_car --arch-data-split ${split} \
-        --epochs 200 --step-epoch 10 -b 512 --warmup ${warmup} --warmup-8bit \
+        --epochs 300 --step-epoch 10 -b 512 --warmup ${warmup} --warmup-8bit \
         --lr 0.001 --lra 0.01 --wd 1e-4 \
         --ai same --cd ${strength} --rt weights \
         --seed 42 --gpu 0 \
@@ -38,7 +38,7 @@ fi
 if [[ "$4" == "ft" ]]; then
     echo Fine-Tune
     python3 main.py ${arch}/model_${strength} -a quant${arch} -d toy_car \
-        --epochs 200 --step-epoch 10 -b 512 \
+        --epochs 350 --step-epoch 10 -b 512 \
         --lr 0.001 --wd 0 --cd ${strength} \
         --seed 42 --gpu 0 \
         --ac ${arch}/model_${strength}/arch_checkpoint.pth.tar -ft \

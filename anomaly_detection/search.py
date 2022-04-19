@@ -302,7 +302,7 @@ def main_worker(gpu, ngpus_per_node, args):
     #optimizer = torch.optim.SGD(model.parameters(), args.lr,
     #                            momentum=args.momentum,
     #                            weight_decay=args.weight_decay)
-    optimizer = torch.optim.Adam(params, args.lr)
+    optimizer = torch.optim.Adam(params, args.lr, weight_decay=args.weight_decay)
     arch_optimizer = torch.optim.SGD(alpha_params, args.lra, momentum=args.momentum,
                                weight_decay=args.alpha_decay)
     
