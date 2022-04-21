@@ -456,10 +456,9 @@ class QuantMultiPrecActivConv2d(nn.Module):
         self.size_product.copy_(tmp)
         if not self.first_layer:
             out = self.mix_activ(input)
-            out = self.mix_weight(out)
         else:
             out = _channel_asym_min_max_quantize.apply(input, 8)
-            out = self.mix_weight(out) 
+        out = self.mix_weight(out) 
         return out
 
 # MR

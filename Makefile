@@ -25,9 +25,7 @@ image_classification-init:
 	mkdir -p image_classification/data
 
 kws-init:
-	mkdir -p kws/log
-	mkdir -p kws/saved_models
-	mkdir -p kws/data
+	echo "nothing to do"
 
 vww-init:
 	wget https://www.silabs.com/public/files/github/machine_learning/benchmarks/datasets/vw_coco2014_96.tar.gz -P visual_wake_words

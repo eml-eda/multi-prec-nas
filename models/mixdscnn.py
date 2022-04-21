@@ -72,7 +72,8 @@ class BasicBlockGumbel(nn.Module):
 class Backbone(nn.Module):
     def __init__(self, conv_func, input_size, bnaff, **kwargs):
         super().__init__()
-        self.input_layer = conv_func(1, 64, kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, **kwargs)
+        self.input_layer = conv_func(1, 64, kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, 
+            fix_qtz=True, **kwargs)
         self.bn = nn.BatchNorm2d(64, affine=bnaff)
         self.dpout0 = nn.Dropout(0.2)
         self.bb_1 = BasicBlockGumbel(conv_func, 64, 64, 1, **kwargs)

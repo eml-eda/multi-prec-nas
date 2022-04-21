@@ -234,7 +234,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.dataset == 'GoogleSpeechCommands':
         num_classes = 12
 
-        data_dir = args.data.parent.parent.parent / 'GoogleSpeechCommands'
+        data_dir = args.data.parent.parent / 'GoogleSpeechCommands'
 
         Flags, unparsed = kws_util.parse_command()
         Flags.data_dir = str(data_dir)
@@ -524,8 +524,8 @@ def main_worker(gpu, ngpus_per_node, args):
     #    num_workers=args.workers, pin_memory=True)
 
     # If warmup is enabled check if pretrained model exists
-    if args.warmup != 0 and args.warmup_8bit:
-        warmup_pretrained_checkpoint = args.data.parent / ('warmup_' + str(args.warmup) + '.pth.tar')
+    if args.warmup != 0 and not args.warmup_8bit:
+        warmup_pretrained_checkpoint = args.data.parent.parent / ('warmup_' + str(args.warmup) + '.pth.tar')
         if warmup_pretrained_checkpoint.exists():
             print(f"=> loading pretrained model '{warmup_pretrained_checkpoint}'")
             checkpoint = torch.load(warmup_pretrained_checkpoint)
@@ -550,7 +550,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 if 'alpha' in name:
                     param.requires_grad = True
     elif args.warmup_8bit:
-        pretrained_checkpoint = args.data.parent / ('warmup_8bit.pth.tar')
+        pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
         state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
@@ -630,7 +630,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print('Best Acc_val@1 {0} @ epoch {1}'.format(best_acc1_val, best_epoch))
 
     test_acc1 = best_acc1_test
-    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch_test))
+    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch))
 
 def train(train_loader, val_loader, test_loader, model, criterion, optimizer, arch_optimizer, args, scope='Search'):
     best_epoch = args.start_epoch

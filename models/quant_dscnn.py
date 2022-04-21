@@ -7,6 +7,7 @@ from . import quant_module as qm
 # MR
 __all__ = [
    'quantdscnn_fp', 'quantdscnn_w8a8', 'quantdscnn_w4a8', 'quantdscnn_w2a8',
+   'quantdscnn_w248a8_multiprec', 'quantdscnn_w248a8_chan',
 ]
 
 # MR
@@ -36,6 +37,34 @@ class BasicBlock(nn.Module):
         #out = self.relu1(out)
         return out
 
+# MR
+class Backbone(nn.Module):
+    def __init__(self, conv_func, input_size, bnaff, archws, archas, **kwargs):
+        super().__init__()
+        self.input_layer = conv_func(1, 64, abits=archas[0], wbits=archws[0],
+            kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, 
+            first_layer=True, **kwargs)
+        self.bn = nn.BatchNorm2d(64, affine=bnaff)
+        self.dpout0 = nn.Dropout(0.2)
+        self.bb_1 = BasicBlock(conv_func, 64, 64, archws[1:3], archas[1:3], stride=1, **kwargs)
+        self.bb_2 = BasicBlock(conv_func, 64, 64, archws[3:5], archas[3:5], stride=1, **kwargs)
+        self.bb_3 = BasicBlock(conv_func, 64, 64, archws[5:7], archas[5:7], stride=1, **kwargs)
+        self.bb_4 = BasicBlock(conv_func, 64, 64, archws[7:9], archas[7:9], stride=1, **kwargs)
+        self.dpout1 = nn.Dropout(0.4)
+        self.pool = nn.AvgPool2d((int(input_size[0]/2), int(input_size[1]/2)))
+    
+    def forward(self, x):
+        out = self.input_layer(x)
+        out = self.bn(out)
+        out = self.dpout0(out)
+        out = self.bb_1(out)
+        out = self.bb_2(out)
+        out = self.bb_3(out)
+        out = self.bb_4(out)
+        out = self.dpout1(out)
+        out = self.pool(out)
+        return out
+
 class DS_CNN(nn.Module):
     def __init__(self, conv_func, archws, archas, qtz_fc=None, num_classes=12, input_size=(49,10),
                  bnaff=True, **kwargs):
@@ -48,22 +77,23 @@ class DS_CNN(nn.Module):
         else:
             self.qtz_fc = False
         super().__init__()
-        self.model = nn.Sequential(
-            # first_layer=True removes the ReLU activation
-            conv_func(1, 64, abits=archas[0], wbits=archws[0], 
-                        kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, first_layer=True, **kwargs), # 1
-            #conv_func(1, 64, abits=archas[0], wbits=archws[0], 
-            #            kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, **kwargs), # 1
-            nn.BatchNorm2d(64, affine=bnaff),
-            #nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-            BasicBlock(conv_func, 64, 64, archws[1:3], archas[1:3], stride=1, **kwargs), # 2
-            BasicBlock(conv_func, 64, 64, archws[3:5], archas[3:5], stride=1, **kwargs), # 3
-            BasicBlock(conv_func, 64, 64, archws[5:7], archas[5:7], stride=1, **kwargs), # 4
-            BasicBlock(conv_func, 64, 64, archws[7:9], archas[7:9], stride=1, **kwargs), # 5
-            nn.Dropout(0.4), 
-            nn.AvgPool2d((int(input_size[0]/2), int(input_size[1]/2))),
-        )
+        #self.model = nn.Sequential(
+        #    # first_layer=True removes the ReLU activation
+        #    conv_func(1, 64, abits=archas[0], wbits=archws[0], 
+        #                kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, first_layer=True, **kwargs), # 1
+        #    #conv_func(1, 64, abits=archas[0], wbits=archws[0], 
+        #    #            kernel_size=(10,4), stride=2, padding=(5,1), bias=False, groups=1, **kwargs), # 1
+        #    nn.BatchNorm2d(64, affine=bnaff),
+        #    #nn.ReLU(inplace=True),
+        #    nn.Dropout(0.2),
+        #    BasicBlock(conv_func, 64, 64, archws[1:3], archas[1:3], stride=1, **kwargs), # 2
+        #    BasicBlock(conv_func, 64, 64, archws[3:5], archas[3:5], stride=1, **kwargs), # 3
+        #    BasicBlock(conv_func, 64, 64, archws[5:7], archas[5:7], stride=1, **kwargs), # 4
+        #    BasicBlock(conv_func, 64, 64, archws[7:9], archas[7:9], stride=1, **kwargs), # 5
+        #    nn.Dropout(0.4), 
+        #    nn.AvgPool2d((int(input_size[0]/2), int(input_size[1]/2))),
+        #)
+        self.model = Backbone(conv_func, input_size, bnaff, archws, archas, **kwargs)
         if self.qtz_fc:
             self.fc = conv_func(64, num_classes, abits=archas[-1], wbits=archws[-1], 
                         kernel_size=1, stride=1, padding=0, bias=True, groups=1, fc=self.qtz_fc, **kwargs)
@@ -141,6 +171,88 @@ class DS_CNN(nn.Module):
                     layer_idx += 1
         return sum_bitops, sum_bita, sum_bitw, peak_layer, peak_wbit
 
+def _load_arch(arch_path, names_nbits):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    best_arch, worst_arch = {}, {}
+    for name in names_nbits.keys():
+        best_arch[name], worst_arch[name] = [], []
+    for name, params in state_dict.items():
+        name = name.split('.')[-1]
+        if name in names_nbits.keys():
+            alpha = params.cpu().numpy()
+            assert names_nbits[name] == alpha.shape[0]
+            best_arch[name].append(alpha.argmax())
+            worst_arch[name].append(alpha.argmin())
+
+    return best_arch, worst_arch
+
+# MR
+def _load_arch_multi_prec(arch_path):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    best_arch, worst_arch = {}, {}
+    best_arch['alpha_activ'], worst_arch['alpha_activ'] = [], []
+    best_arch['alpha_weight'], worst_arch['alpha_weight'] = [], []
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            alpha = params.cpu().numpy()
+            best_arch[name].append(alpha.argmax())
+            worst_arch[name].append(alpha.argmin())
+        elif name == 'alpha_weight':
+            alpha = params.cpu().numpy()
+            best_arch[name].append(alpha.argmax(axis=0))
+            worst_arch[name].append(alpha.argmin(axis=0))
+
+    return best_arch, worst_arch
+
+# MR
+def _load_alpha_state_dict(arch_path):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    alpha_state_dict = dict()
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ' or name == 'alpha_weight':
+            alpha_state_dict[full_name] = params
+
+    return alpha_state_dict
+
+# MR
+def _load_alpha_state_dict_as_mp(arch_path, model):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    alpha_state_dict = dict()
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            alpha_state_dict[full_name] = params
+        elif name == 'alpha_weight':
+            mp_params = torch.tensor(model.state_dict()[full_name])
+            mp_params[0] = params[0]
+            mp_params[1] = params[1]
+            mp_params[2] = params[2]
+            alpha_state_dict[full_name] = mp_params
+
+    return alpha_state_dict
+
+# MR
+def _remove_alpha(state_dict):
+    weight_state_dict = copy.deepcopy(state_dict)
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            weight_state_dict.pop(full_name)
+        elif name == 'alpha_weight':
+            weight_state_dict.pop(full_name)
+
+    return weight_state_dict
+
 # MR
 def quantdscnn_fp(arch_cfg_path, **kwargs):
     # This precisions can be whatever
@@ -172,3 +284,55 @@ def quantdscnn_w2a8(arch_cfg_path, **kwargs):
     #assert len(archas) == 10
     #assert len(archws) == 10
     return DS_CNN(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='fixed', **kwargs)
+
+# MR
+# qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
+def quantdscnn_w248a8_multiprec(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+
+    ## This block of code is only necessary to comply with the underlying EdMIPS code ##
+    best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w_ch in best_arch['alpha_weight']]
+    #if len(archws) == 20:
+        # Case of fixed-precision on last fc layer
+    #    archws.append(8)
+    #assert len(archas) == 21 # 21 insead of 19 because conv1 and fc activations are also quantized
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized 
+    ##
+    #import pdb; pdb.set_trace()
+    model = DS_CNN(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        state_dict = torch.load(arch_cfg_path)['state_dict']
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        # Load only alphas weights
+        alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model
+
+# MR, as mp
+def quantdscnn_w248a8_chan(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
+    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w in best_arch['alpha_weight']]
+    #assert len(archas) == 21 # 21 insead of 19 because fc activations are also quantized (the first element [8] is dummy)
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized
+    model = DS_CNN(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        checkpoint = torch.load(arch_cfg_path)
+        weight_state_dict = _remove_alpha(checkpoint['state_dict'])
+        model.load_state_dict(weight_state_dict, strict=False)
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    else:
+        # Load all weights
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        #state_dict = torch.load(arch_cfg_path)['state_dict']
+        #model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model

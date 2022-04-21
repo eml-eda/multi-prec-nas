@@ -465,7 +465,9 @@ def main_worker(gpu, ngpus_per_node, args):
     #    num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, model, criterion, 0, args)
+        acc1_test = validate(test_loader, model, criterion, 0, args)
+        print(f'Acc_val: {acc1} Acc_test: {acc1_test}')
         return
 
     best_epoch = args.start_epoch
