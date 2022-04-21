@@ -697,13 +697,10 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
-        is_best_test = acc1_test > best_acc1_test
-        best_acc1 = max(acc1, best_acc1)
-        best_acc1_test = max(acc1_test, best_acc1_test)
         if is_best:
             best_epoch = epoch
-        if is_best_test:
-            best_epoch_test = epoch
+            best_acc1 = max(acc1, best_acc1)
+            best_acc1_test = max(acc1_test, best_acc1_test)
 
         # Anneal temperature 
         if args.anneal_temp and scope == 'Search':

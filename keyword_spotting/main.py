@@ -492,13 +492,10 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
-        is_best_test = acc1_test > best_acc1_test
-        best_acc1 = max(acc1, best_acc1)
-        best_acc1_test = max(acc1_test, best_acc1_test)
         if is_best:
             best_epoch = epoch
-        if is_best_test:
-            best_epoch_test = epoch
+            best_acc1 = max(acc1, best_acc1)
+            best_acc1_test = max(acc1_test, best_acc1_test)
 
         #print('========= architecture info =========')
         #if hasattr(model, 'module'):
@@ -521,7 +518,7 @@ def main_worker(gpu, ngpus_per_node, args):
     print('Best Acc_val@1 {0} @ epoch {1}'.format(best_acc1_val, best_epoch))
 
     test_acc1 = best_acc1_test
-    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch_test))
+    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
