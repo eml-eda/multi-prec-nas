@@ -744,7 +744,11 @@ class SharedMixQuantChanConv2d(nn.Module):
         #assert not kwargs['bias']
         self.bits = bits
         self.gumbel = gumbel
-        self.param_size = inplane * outplane * kwargs['kernel_size'] / kwargs['groups'] * 1e-6
+        if isinstance(kwargs['kernel_size'], tuple):
+            kernel_size = kwargs['kernel_size'][0] * kwargs['kernel_size'][1]
+        else:
+            kernel_size = kwargs['kernel_size'] * kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
         self.alpha_weight = Parameter(torch.Tensor(len(self.bits)))
         self.alpha_init = kwargs.pop('alpha_init', 'same')
         if self.alpha_init == 'same':

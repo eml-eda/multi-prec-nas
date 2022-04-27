@@ -227,7 +227,7 @@ def main_worker(gpu, ngpus_per_node, args):
                                           n_fft=1024,
                                           hop_length=512,
                                           power=2.0)
-
+        import pdb; pdb.set_trace()
         if args.distributed:
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         else:

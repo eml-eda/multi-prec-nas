@@ -14,8 +14,8 @@ import numpy as np
 from sklearn.preprocessing import QuantileTransformer, RobustScaler, MinMaxScaler
 
 import tensorflow as tf
-tf.config.threading.set_inter_op_parallelism_threads(4)
-tf.config.threading.set_intra_op_parallelism_threads(4)
+tf.config.threading.set_inter_op_parallelism_threads(2)
+tf.config.threading.set_intra_op_parallelism_threads(2)
 #tf.config.set_soft_device_placement(True)
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
