@@ -16,7 +16,7 @@ andet-init:
 	unzip ${ZIPFILE} -d anomaly_detection/dev_data
 	rm ${ZIPFILE}
 	curl ${URL2} -o ${ZIPFILE} || wget ${URL2} -O ${ZIPFILE}
-	unzip ${ZIPFILE} -d dev_data
+	unzip ${ZIPFILE} -d anomaly_detection/dev_data
 	rm ${ZIPFILE}
 
 image_classification-init:
