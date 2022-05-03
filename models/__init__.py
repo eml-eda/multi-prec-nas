@@ -4,6 +4,7 @@ from .quant_inception import *
 from .quant_mobilenetv1 import *
 from .quant_dscnn import *
 from .quant_denseae import *
+from .quant_temponet import *
 from .mixresnet import *
 from .mixgoogle import *
 from .mixinception import *

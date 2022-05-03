@@ -439,7 +439,40 @@ class QuantizedChanConv1d(nn.Module):
         out = F.conv1d(input, quant_weight, conv.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
         return out
 
+# MR
+class FpConv1d(nn.Module):
 
+    def __init__(self, inplane, outplane, wbits, abits, first_layer=False, **kwargs):
+        super().__init__()
+        self.abit = abits
+        self.wbits = wbits
+
+        self.first_layer = first_layer
+
+        self.fine_tune = kwargs.pop('fine_tune', False)
+        self.fc = kwargs.pop('fc', False)
+
+        self.conv = nn.Conv1d(inplane, outplane, **kwargs)
+        self.relu = nn.ReLU()
+        # complexities
+        stride = kwargs['stride'] if 'stride' in kwargs else 1
+        kernel_size = kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size * 1e-6
+        self.filter_size = self.param_size / float(stride ** 2.0)
+        self.register_buffer('size_product', torch.tensor(0, dtype=torch.float))
+        self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
+
+    def forward(self, input):
+        in_shape = input.shape
+        tmp = torch.tensor(in_shape[1] * in_shape[2] * 1e-3, dtype=torch.float)
+        self.memory_size.copy_(tmp)
+        tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
+        self.size_product.copy_(tmp)
+        if not self.first_layer:
+            out = self.conv(self.relu(input))
+        else:
+            out = self.conv(input)
+        return out
 
 class SharedMixQuantLinear(nn.Module):
 
