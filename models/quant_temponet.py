@@ -7,7 +7,8 @@ from . import quant_module_1d as qm1d
 
 # MR
 __all__ = [
-   'quanttemponet_fp',
+   'quanttemponet_fp', 
+   'quanttemponet_w2a8', 'quanttemponet_w4a8', 'quanttemponet_w8a8',
 ]
 
 class TEMPONet(nn.Module):
@@ -53,7 +54,7 @@ class TEMPONet(nn.Module):
             if isinstance(m, self.conv_func):
                 size_product = m.size_product.item()
                 memory_size = m.memory_size.item()
-                if isinstance(m, qm.QuantMultiPrecActivConv1d):
+                if isinstance(m, qm1d.QuantMultiPrecActivConv1d):
                     for name, params in m.state_dict().items():
                         full_name = name
                         name = name.split('.')[-1]
@@ -85,6 +86,7 @@ class TEMPONet(nn.Module):
         return sum_bitops, sum_bita, sum_bitw, peak_layer, peak_wbit
 
 class FeatureExtractor(nn.Module):
+
     def __init__(self, conv_func, input_size, archws, archas, **kwargs):
         super().__init__()
         # pad = ((k-1)*dil+1)//2
@@ -122,6 +124,7 @@ class FeatureExtractor(nn.Module):
         x = self.cb2(x)
         return x
 
+
 class TempConvBlock(nn.Module):
     def __init__(self, conv_func, ch_in, ch_out, k, dil, pad, stride, archws, archas, first_layer=False, **kwargs):
         super().__init__()
@@ -133,6 +136,7 @@ class TempConvBlock(nn.Module):
         x = self.tcn(x)
         x = self.bn(x)
         return x
+
 
 class ConvBlock(nn.Module):
     def __init__(self, conv_func, ch_in, ch_out, k, dil, pad, stride, archws, archas, **kwargs):
@@ -147,6 +151,7 @@ class ConvBlock(nn.Module):
         x = self.pool(x)
         x = self.bn(x)
         return x
+
 
 class Classifier(nn.Module):
     def __init__(self, conv_func, qtz_fc, archws, archas, **kwargs):
@@ -168,7 +173,23 @@ class Classifier(nn.Module):
         x = self.fc2(x)
         return x
 
+
 def quanttemponet_fp(arch_cfg_path, **kwargs):
     # This precisions can be whatever
     archas, archws = [8] * 12, [8] * 12
     return TEMPONet(qm1d.FpConv1d, archws, archas, **kwargs)
+
+# MR
+def quanttemponet_w2a8(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 12, [2] * 12
+    return TEMPONet(qm1d.QuantMixActivChanConv1d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quanttemponet_w4a8(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 12, [4] * 12
+    return TEMPONet(qm1d.QuantMixActivChanConv1d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quanttemponet_w8a8(arch_cfg_path, **kwargs):
+    archas, archws = [8] * 12, [8] * 12
+    return TEMPONet(qm1d.QuantMixActivChanConv1d, archws, archas, qtz_fc='mixed', **kwargs)

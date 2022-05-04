@@ -7,6 +7,7 @@ from torch.nn.parameter import Parameter
 gaussian_steps = {1: 1.596, 2: 0.996, 3: 0.586, 4: 0.336}
 hwgq_steps = {1: 0.799, 2: 0.538, 3: 0.3217, 4: 0.185}
 
+
 # DJP: (Check for DW)
 class _channel_asym_min_max_quantize(torch.autograd.Function):
 
@@ -20,15 +21,20 @@ class _channel_asym_min_max_quantize(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output, None, None
 
+
 # DJP
 def _channel_min_max_quantize_common(x, ch_min, ch_max, bit):
-    ch_range= ch_max - ch_min
-    ch_range.masked_fill_(ch_range.eq(0), 1)
-    n_steps = 2 ** bit - 1
-    S_w = ch_range / n_steps
-    S_w = S_w.view((x.size(0), 1, 1))
-    y = x.div(S_w).round().mul(S_w)
+    if bit != 0:
+        ch_range = ch_max - ch_min
+        ch_range.masked_fill_(ch_range.eq(0), 1)
+        n_steps = 2 ** bit - 1
+        S_w = ch_range / n_steps
+        S_w = S_w.view((x.size(0), 1, 1))
+        y = x.div(S_w).round().mul(S_w)
+    else:
+        y = torch.zeros(x.shape, device=x.device)
     return y
+
 
 # DJP: (Check for DW)
 class _channel_asym_min_max_quantize_linear(torch.autograd.Function):
@@ -43,19 +49,47 @@ class _channel_asym_min_max_quantize_linear(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output, None, None
 
+
 # DJP
 def _channel_min_max_quantize_common_linear(x, ch_min, ch_max, bit):
-    ch_range= ch_max - ch_min
+    ch_range = ch_max - ch_min
     ch_range.masked_fill_(ch_range.eq(0), 1)
     n_steps = 2 ** bit - 1
     S_w = ch_range / n_steps
     S_w = S_w.view((x.size(0), 1))
     y = x.div(S_w).round().mul(S_w)
     return y
+
+
+# MR:
+class _bias_asym_min_max_quantize(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, x, bit):
+        bias_max = x.max()
+        bias_min = x.min()
+        return _bias_min_max_quantize_common(x, bias_min, bias_max, bit)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, None, None
+
+
+# MR
+def _bias_min_max_quantize_common(x, ch_min, ch_max, bit):
+    bias_range= ch_max - ch_min
+    n_steps = 2 ** bit - 1
+    S_bias = bias_range / n_steps
+    y = (x / S_bias).round() * S_bias
+   
+    return y
+
+
 # DJP
 def asymmetric_linear_quantization_scale_factor(num_bits, saturation_min, saturation_max):
     n = 2 ** num_bits - 1
     return n / (saturation_max - saturation_min)
+
 
 # DJP
 def linear_quantize(input, scale_factor, inplace=False):
@@ -64,6 +98,7 @@ def linear_quantize(input, scale_factor, inplace=False):
         return input
     return torch.floor(scale_factor * input)
 
+
 # DJP
 def linear_dequantize(input, scale_factor, inplace=False):
     if inplace:
@@ -71,12 +106,14 @@ def linear_dequantize(input, scale_factor, inplace=False):
         return input
     return input / scale_factor
 
+
 # DJP
 def clamp(input, min, max, inplace=False):
     if inplace:
         input.clamp_(min, max)
         return input
     return torch.clamp(input, min, max)
+
 
 # DJP
 class LearnedClippedLinearQuantizeSTE(torch.autograd.Function):
@@ -107,6 +144,7 @@ class LearnedClippedLinearQuantizeSTE(torch.autograd.Function):
         # Straight-through estimator for the scale factor calculation
         return grad_input, grad_alpha, None, None, None
 
+
 # DJP (w.r.t Manuele's code I changed inplace to false to avoid error)
 class LearnedClippedLinearQuantization(nn.Module):
     def __init__(self, num_bits, init_act_clip_val=6, dequantize=True, inplace=False):
@@ -124,6 +162,8 @@ class LearnedClippedLinearQuantization(nn.Module):
         inplace_str = ', inplace' if self.inplace else ''
         return '{0}(num_bits={1}, clip_val={2}{3})'.format(self.__class__.__name__, self.num_bits, self.clip_val,
                                                            inplace_str)
+
+
 # DJP
 class MixQuantPaCTActiv(nn.Module):
 
@@ -138,12 +178,13 @@ class MixQuantPaCTActiv(nn.Module):
 
     def forward(self, input):
         outs = []
-        #self.alpha_activ = torch.nn.Parameter(clamp(self.alpha_activ,-100,+100))
+        # self.alpha_activ = torch.nn.Parameter(clamp(self.alpha_activ,-100,+100))
         sw = F.softmax(self.alpha_activ, dim=0)
         for i, branch in enumerate(self.mix_activ):
             outs.append(branch(input) * sw[i])
         activ = sum(outs)
         return activ
+
 
 # DJP
 class SharedMixQuantChanConv1d(nn.Module):
@@ -158,7 +199,7 @@ class SharedMixQuantChanConv1d(nn.Module):
 
     def forward(self, input):
         mix_quant_weight = []
-        #self.alpha_weight = torch.nn.Parameter(clamp(self.alpha_weight, -100, +100))
+        # self.alpha_weight = torch.nn.Parameter(clamp(self.alpha_weight, -100, +100))
         sw = F.softmax(self.alpha_weight, dim=0)
         conv = self.conv
         weight = conv.weight
@@ -170,6 +211,7 @@ class SharedMixQuantChanConv1d(nn.Module):
         out = F.conv1d(
             input, mix_quant_weight, conv.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
         return out
+
 
 # DJP
 class SharedMultiPrecConv1d(nn.Module):
@@ -197,10 +239,11 @@ class SharedMultiPrecConv1d(nn.Module):
             input, mix_quant_weight, conv.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
         return out
 
+
 # DJP
 class MultiPrecActivConv1d(nn.Module):
 
-    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, first_layer = False, **kwargs):
+    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, first_layer=False, **kwargs):
         super(MultiPrecActivConv1d, self).__init__()
         if wbits is None:
             self.wbits = [1, 2]
@@ -213,7 +256,7 @@ class MultiPrecActivConv1d(nn.Module):
         # build mix-precision branches
         # TODO: change here for multi-prec activations
         self.first_layer = first_layer
-        if self.first_layer != True:
+        if self.first_layer is not True:
             self.mix_activ = MixQuantPaCTActiv(self.abits)
         # for multiprec, only share-weight is feasible
         assert share_weight == True
@@ -235,13 +278,13 @@ class MultiPrecActivConv1d(nn.Module):
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
         self.size_product.copy_(tmp)
-        if self.first_layer != True:
+        if self.first_layer is not True:
             input = self.mix_activ(input)
         out = self.mix_weight(input)
         return out
 
     def complexity_loss(self):
-        if self.first_layer != True:
+        if self.first_layer is not True:
             sw = F.softmax(self.mix_activ.alpha_activ, dim=0)
             mix_abit = 0
             abits = self.mix_activ.bits
@@ -307,7 +350,7 @@ class MultiPrecActivConv1d(nn.Module):
 # DJP
 class MixActivChanConv1d(nn.Module):
 
-    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, first_layer = False, **kwargs):
+    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, first_layer=False, **kwargs):
         super(MixActivChanConv1d, self).__init__()
         if wbits is None:
             self.wbits = [1, 2]
@@ -319,7 +362,7 @@ class MixActivChanConv1d(nn.Module):
             self.abits = abits
         # build mix-precision branches
         self.first_layer = first_layer
-        if self.first_layer != True:
+        if self.first_layer is not True:
             self.mix_activ = MixQuantPaCTActiv(self.abits)
         self.share_weight = share_weight
         if share_weight:
@@ -438,6 +481,98 @@ class QuantizedChanConv1d(nn.Module):
         quant_weight = _channel_asym_min_max_quantize.apply(weight, self.wbits)
         out = F.conv1d(input, quant_weight, conv.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
         return out
+
+
+# MR
+class QuantPaCTActiv(nn.Module):
+
+    def __init__(self, bits):
+        super().__init__()
+        if type(bits) == int:
+            self.bits = [bits]
+        else:
+            self.bits = bits
+        self.alpha_activ = Parameter(torch.Tensor(len(self.bits)), requires_grad=False)
+        self.alpha_activ.data.fill_(0.01)
+        self.mix_activ = nn.ModuleList()
+        for bit in self.bits:
+            self.mix_activ.append(LearnedClippedLinearQuantization(num_bits=bit))
+
+    def forward(self, input):
+        outs = []
+        # self.alpha_activ = torch.nn.Parameter(clamp(self.alpha_activ,-100,+100))
+        sw = F.one_hot(torch.argmax(self.alpha_activ), num_classes = len(self.bits))
+        for i, branch in enumerate(self.mix_activ):
+            outs.append(branch(input) * sw[i])
+        activ = sum(outs)
+        return activ
+
+
+# MR
+class QuantMixActivChanConv1d(nn.Module):
+
+    def __init__(self, inplane, outplane, wbits, abits, fc=False, **kwargs):
+        super().__init__()
+        self.abits = abits
+        self.wbit = wbits
+        self.fc = False
+
+        self.first_layer = kwargs.pop('first_layer', False)
+
+        self.mix_activ = QuantPaCTActiv(abits)
+        if not self.fc:
+            self.mix_weight = QuantMixChanConv1d(inplane, outplane, bits=wbits, **kwargs)
+        else:
+            # If the layer is fc we use fixed quantization on 8bits
+            self.mix_weight = QuantMixChanConv1d(inplane, outplane, 8, **kwargs)
+        # complexities
+        stride = kwargs['stride'] if 'stride' in kwargs else 1
+        kernel_size = kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
+        self.filter_size = self.param_size / float(stride ** 2.0)
+        self.register_buffer('size_product', torch.tensor(0, dtype=torch.float))
+        self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
+
+    def forward(self, input):
+        in_shape = input.shape
+        tmp = torch.tensor(in_shape[1] * in_shape[2] * 1e-3, dtype=torch.float)
+        self.memory_size.copy_(tmp)
+        tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
+        self.size_product.copy_(tmp)
+        if not self.first_layer:
+            out = self.mix_activ(input)
+            out = self.mix_weight(out)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8)
+            out = self.mix_weight(out)
+        return out
+
+
+# MR
+class QuantMixChanConv1d(nn.Module):
+
+    def __init__(self, inplane, outplane, bits, **kwargs):
+        super().__init__()
+        self.bits = bits
+        self.outplane = outplane
+
+        kwargs.pop('alpha_init', None)
+
+        self.fine_tune = kwargs.pop('fine_tune', False)
+        self.conv = nn.Conv1d(inplane, outplane, **kwargs)
+
+    def forward(self, input):
+        conv = self.conv
+        bias = getattr(conv, 'bias', None)
+        quant_weight = _channel_asym_min_max_quantize.apply(conv.weight, self.bits)
+        if bias is not None:
+            quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
+        else:
+            quant_bias = bias
+        out = F.conv1d(
+            input, quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
+        return out
+
 
 # MR
 class FpConv1d(nn.Module):

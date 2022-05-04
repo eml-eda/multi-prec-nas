@@ -49,6 +49,8 @@ parser.add_argument('-d', '--dataset', default='PPG_Dalia', type=str,
                     help='PPG_Dalia')
 parser.add_argument('--epochs', default=500, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=20, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=25, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -187,13 +189,20 @@ def main_worker(gpu, ngpus_per_node, rng, args):
 
         train_set, test_set = split_train_test(data_dir, rng)
 
+        # Split dataset into train and validation
+        train_len = int(len(train_set) * 0.8)
+        val_len = len(train_set) - train_len
+        # Fix generator seed for reproducibility
+        data_gen = torch.Generator().manual_seed(args.seed)
+        train_dataset, val_dataset = torch.utils.data.random_split(train_set, [train_len, val_len], generator=data_gen)
+
         train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=args.batch_size, shuffle=True,
+            train_dataset, batch_size=args.batch_size, shuffle=True,
             num_workers=args.workers, pin_memory=True, sampler=None)
 
-        #val_loader = torch.utils.data.DataLoader(
-        #    val_set, batch_size=args.batch_size, shuffle=False,
-        #    num_workers=args.workers, pin_memory=True)
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=args.batch_size, shuffle=True,
+            num_workers=args.workers, pin_memory=True)
         
         test_loader = torch.utils.data.DataLoader(
             test_set, batch_size=args.batch_size, shuffle=False,
@@ -290,14 +299,21 @@ def main_worker(gpu, ngpus_per_node, rng, args):
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
-        # evaluate on validation set
-        mae_test = validate(test_loader, model, criterion, epoch, args)
+        # evaluate on val and test sets
+        mae_val = validate(val_loader, model, criterion, epoch, args, scope='Val')
+        mae_test = validate(test_loader, model, criterion, epoch, args, scope='Test')
 
         # remember best acc@1 and save checkpoint
-        is_best = mae_test < best_mae
+        is_best = mae_val < best_mae
         if is_best:
             best_epoch = epoch
-            best_mae = min(mae_test, best_mae)
+            best_mae = min(mae_val, best_mae)
+            best_mae_test = mae_test
+            epoch_wout_improve = 0
+            print(f'New best MAE_val: {best_mae}')
+        else:
+            epoch_wout_improve += 1
+            print(f'No improvement in {epoch_wout_improve} epochs.')
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -305,11 +321,17 @@ def main_worker(gpu, ngpus_per_node, rng, args):
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
-                'best_mae': best_mae,
+                'best_mae': best_mae_test,
                 'optimizer': optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch)
 
-    print('Test MAE: {0} @ epoch {1}'.format(best_mae, best_epoch))
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
+
+    print('Val MAE: {0} @ epoch {1}'.format(best_mae, best_epoch))
+    print('Test MAE: {0} @ epoch {1}'.format(best_mae_test, best_epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
@@ -366,14 +388,14 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                 "Train/lr": curr_lr
             })
 
-def validate(val_loader, model, criterion, epoch, args):
+def validate(val_loader, model, criterion, epoch, args, scope='Val'):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     mae = AverageMeter('MAE', ':6.2f')
     progress = ProgressMeter(
         len(val_loader),
         [batch_time, losses, mae],
-        prefix='Test: ')
+        prefix=f'{scope}: ')
     # switch to evaluate mode
     model.eval()
 
