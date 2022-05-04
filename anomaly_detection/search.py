@@ -522,7 +522,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
             auc_test, p_auc_test = test(data_dir, model, args)
             print('AUC: {0}, pAUC: {1}'.format(auc_test, p_auc_test))
             epoch_wout_improve = 0
-            print(f'New best MSE_val: {best_acc1}')
+            print(f'New best MSE_val: {best_mse}')
         else:
             epoch_wout_improve += 1
             print(f'No improvement in {epoch_wout_improve} epochs.')
