@@ -66,9 +66,12 @@ class _bias_asym_min_max_quantize(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, bit):
-        bias_max = x.max()
-        bias_min = x.min()
-        return _bias_min_max_quantize_common(x, bias_min, bias_max, bit)
+        if x.shape[0] == 1 and x < 0:
+            return _bias_min_max_quantize_common(x, x.min(), 0, bit)
+        elif x.shape[0] == 1 and x >= 0:
+            return _bias_min_max_quantize_common(x, 0, x.max(), bit)
+        else:
+            return _bias_min_max_quantize_common(x, x.min(), x.max(), bit)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -544,7 +547,7 @@ class QuantMixActivChanConv1d(nn.Module):
             out = self.mix_weight(out)
         else:
             out = _channel_asym_min_max_quantize.apply(input, 8)
-            out = self.mix_weight(out)
+            out = self.mix_weight(input)
         return out
 
 

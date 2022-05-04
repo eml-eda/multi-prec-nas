@@ -129,7 +129,7 @@ class TempConvBlock(nn.Module):
     def __init__(self, conv_func, ch_in, ch_out, k, dil, pad, stride, archws, archas, first_layer=False, **kwargs):
         super().__init__()
         self.tcn = conv_func(ch_in, ch_out, archws, archas, kernel_size=k, 
-            dilation=dil, stride=stride, padding=pad, bias=False, first_layer=first_layer, **kwargs)
+            dilation=dil, stride=stride, padding=pad, bias=False, first_layer=first_layer, groups=1, **kwargs)
         self.bn = nn.BatchNorm1d(ch_out)
 
     def forward(self, x):
@@ -142,7 +142,7 @@ class ConvBlock(nn.Module):
     def __init__(self, conv_func, ch_in, ch_out, k, dil, pad, stride, archws, archas, **kwargs):
         super().__init__()
         self.conv = conv_func(ch_in, ch_out, archws, archas, kernel_size=k, 
-            dilation=dil, stride=stride, padding=pad, bias=False, **kwargs)
+            dilation=dil, stride=stride, padding=pad, bias=False, groups=1, **kwargs)
         self.pool = nn.AvgPool1d(kernel_size=2, stride=2)
         self.bn = nn.BatchNorm1d(ch_out)
 
