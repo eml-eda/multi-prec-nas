@@ -517,7 +517,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
         is_best = mse < best_mse
         if is_best:
             best_epoch = epoch
-            best_acc1 = min(mse, best_mse)
+            best_mse = min(mse, best_mse)
             # Run test
             auc_test, p_auc_test = test(data_dir, model, args)
             print('AUC: {0}, pAUC: {1}'.format(auc_test, p_auc_test))
