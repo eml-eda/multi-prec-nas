@@ -58,6 +58,8 @@ parser.add_argument('-d', '--dataset', default='toy_car', type=str,
                     help='toy_car')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=20, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=30, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -380,7 +382,8 @@ def main_worker(gpu, ngpus_per_node, args):
         print('=> no warmup')
 
     # Search
-    best_epoch, best_acc1 = train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, args, scope='Search')
+    best_epoch, best_acc1, auc_best, p_auc_best = train(train_loader, val_loader, model, criterion, optimizer, 
+        arch_optimizer, args, data_dir, scope='Search')
 
     ### OLD TRAINING LOOP ###
     #best_epoch = args.start_epoch
@@ -442,11 +445,13 @@ def main_worker(gpu, ngpus_per_node, args):
         wandb.log({'table_w': wandb_table_w})
 
     auc, p_auc = test(data_dir, model, args)
-    print('AUC: {0}, pAUC: {1}'.format(auc, p_auc))
+    print('End of Training AUC: {0}, pAUC: {1}'.format(auc, p_auc))
 
-def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, args, scope='Search'):
+    print('AUC: {0}, pAUC: {1} @ Best Epoch {2}'.format(auc_best, p_auc_best, best_epoch))
+
+def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, args, data_dir, scope='Search'):
     best_epoch = args.start_epoch
-    best_acc1 = 0
+    best_mse = np.inf
     temp = args.temperature
 
     # Plot gradients
@@ -502,17 +507,25 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
             print('{}: {}'.format(key, value))
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, epoch, args, temp, scope=scope)
+        mse = validate(val_loader, model, criterion, epoch, args, temp, scope=scope)
 
         # Anneal temperature 
         if args.anneal_temp and scope == 'Search':
             temp = anneal_temperature(temp)
 
         # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        is_best = mse < best_mse
         if is_best:
             best_epoch = epoch
+            best_acc1 = min(mse, best_mse)
+            # Run test
+            auc_test, p_auc_test = test(data_dir, model, args)
+            print('AUC: {0}, pAUC: {1}'.format(auc_test, p_auc_test))
+            epoch_wout_improve = 0
+            print(f'New best MSE_val: {best_acc1}')
+        else:
+            epoch_wout_improve += 1
+            print(f'No improvement in {epoch_wout_improve} epochs.')
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -600,7 +613,13 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                     data = table_w, 
                     columns = ['precision', 'fraction'])
             wandb.log({'table_w': wandb_table_w})
-    return best_epoch, best_acc1
+        
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
+
+    return best_epoch, best_acc1, auc_test, p_auc_test
 
 def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope):
     batch_time = AverageMeter('Time', ':6.3f')

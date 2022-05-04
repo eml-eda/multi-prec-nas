@@ -54,6 +54,8 @@ parser.add_argument('-d', '--dataset', default='toy_car', type=str,
                     help='toy_car')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=20, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=30, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -169,7 +171,8 @@ def main():
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    global best_acc1
+    global best_mse
+    best_mse = np.inf
     args.gpu = gpu
 
     if args.gpu is not None:
@@ -316,13 +319,21 @@ def main_worker(gpu, ngpus_per_node, args):
         train(train_loader, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, epoch, args)
+        mse = validate(val_loader, model, criterion, epoch, args)
 
         # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        is_best = mse > best_mse
         if is_best:
             best_epoch = epoch
+            best_mse = min(mse, best_mse)
+            # Run test
+            auc_best, p_auc_best = test(data_dir, model, args)
+            print('AUC: {0}, pAUC: {1}'.format(auc_best, p_auc_best))
+            epoch_wout_improve = 0
+            print(f'New best MSE_val: {best_acc1}')
+        else:
+            epoch_wout_improve += 1
+            print(f'No improvement in {epoch_wout_improve} epochs.')
 
         #print('========= architecture info =========')
         #if hasattr(model, 'module'):
@@ -340,9 +351,16 @@ def main_worker(gpu, ngpus_per_node, args):
                 'best_acc1': best_acc1,
                 'optimizer': optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch)
+        
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
 
     auc, p_auc = test(data_dir, model, args)
-    print('AUC: {0}, pAUC: {1}'.format(auc, p_auc))
+    print('End of Training AUC: {0}, pAUC: {1}'.format(auc, p_auc))
+
+    print('AUC: {0}, pAUC: {1} @ Best Epoch {2}'.format(auc_best, p_auc_best, best_epoch))
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
