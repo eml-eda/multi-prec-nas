@@ -452,12 +452,12 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, args, data_dir, scope='Search'):
     best_epoch = args.start_epoch
     best_mse = np.inf
+    epoch_wout_improve = 0
     temp = args.temperature
 
     # Plot gradients
     #if args.visualization and args.debug:
     #    wandb.watch(model, log='all')
-
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -515,7 +515,6 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # remember best acc@1 and save checkpoint
         is_best = mse < best_mse
-        epoch_wout_improve = 0
         auc_test = 0.
         if is_best:
             best_epoch = epoch

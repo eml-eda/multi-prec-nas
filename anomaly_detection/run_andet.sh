@@ -5,10 +5,10 @@ warmup=$2
 path="/space/risso/multi_prec_exp"
 # arch: {mix, quant}mobilenetv1_w248a248_multiprec, {mix, quant}mobilenetv1_w0248a248_multiprec
 #arch="denseae_fp"
-#arch="denseae_w8a8"
+arch="denseae_w8a8"
 #arch="denseae_w4a8"
 #arch="denseae_w2a8"
-arch="denseae_w248a8_multiprec"
+#arch="denseae_w248a8_multiprec"
 #arch="denseae_w248a8_chan"
 project="multi-precision-nas_andet"
 
@@ -46,9 +46,9 @@ if [[ "$4" == "ft" ]]; then
 else
     echo From-Scratch
     python3 main.py ${arch}/model_${strength} -a quant${arch} -d toy_car \
-        --epochs 100 --step-epoch 10 -b 512 \
+        --epochs 100 --step-epoch 50 -b 512 --patience 100 \
         --lr 0.001 --wd 0 \
         --seed 42 --gpu 0 \
-        --ac ${arch}/model_${strength}/arch_checkpoint.pth.tar \
+        --ac ${arch}/model_${strength}/arch_model_best.pth.tar \
         --visualization -pr ${project} --tags ${tags} | tee ${arch}/model_${strength}/log_fromscratch_$strength.txt
 fi
