@@ -515,6 +515,8 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # remember best acc@1 and save checkpoint
         is_best = mse < best_mse
+        epoch_wout_improve = 0
+        auc_test = 0.
         if is_best:
             best_epoch = epoch
             best_mse = min(mse, best_mse)
@@ -522,7 +524,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
             auc_test, p_auc_test = test(data_dir, model, args)
             print('AUC: {0}, pAUC: {1}'.format(auc_test, p_auc_test))
             epoch_wout_improve = 0
-            print(f'New best MSE_val: {best_acc1}')
+            print(f'New best MSE_val: {best_mse}')
         else:
             epoch_wout_improve += 1
             print(f'No improvement in {epoch_wout_improve} epochs.')
@@ -533,7 +535,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
+                'best_auc': auc_test,
                 'optimizer': optimizer.state_dict(),
                 'arch_optimizer': arch_optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch, args, scope=scope)
