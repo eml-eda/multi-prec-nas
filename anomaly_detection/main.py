@@ -305,6 +305,8 @@ def main_worker(gpu, ngpus_per_node, args):
         return
 
     best_epoch = args.start_epoch
+    epoch_wout_improve = 0
+    auc_best = 0.
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -322,7 +324,7 @@ def main_worker(gpu, ngpus_per_node, args):
         mse = validate(val_loader, model, criterion, epoch, args)
 
         # remember best acc@1 and save checkpoint
-        is_best = mse > best_mse
+        is_best = mse < best_mse
         if is_best:
             best_epoch = epoch
             best_mse = min(mse, best_mse)
@@ -330,7 +332,7 @@ def main_worker(gpu, ngpus_per_node, args):
             auc_best, p_auc_best = test(data_dir, model, args)
             print('AUC: {0}, pAUC: {1}'.format(auc_best, p_auc_best))
             epoch_wout_improve = 0
-            print(f'New best MSE_val: {best_acc1}')
+            print(f'New best MSE_val: {best_mse}')
         else:
             epoch_wout_improve += 1
             print(f'No improvement in {epoch_wout_improve} epochs.')
@@ -348,7 +350,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'epoch': epoch + 1,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
+                'best_auc': auc_best,
                 'optimizer': optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch)
         
