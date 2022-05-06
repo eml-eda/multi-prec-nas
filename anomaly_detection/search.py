@@ -453,6 +453,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
     best_epoch = args.start_epoch
     best_mse = np.inf
     epoch_wout_improve = 0
+    auc_test = 0.
     temp = args.temperature
 
     # Plot gradients
@@ -515,7 +516,6 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # remember best acc@1 and save checkpoint
         is_best = mse < best_mse
-        auc_test = 0.
         if is_best:
             best_epoch = epoch
             best_mse = min(mse, best_mse)

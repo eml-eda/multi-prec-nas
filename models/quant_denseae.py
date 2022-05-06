@@ -313,5 +313,4 @@ def quantdenseae_w248a8_chan(arch_cfg_path, **kwargs):
         #state_dict = torch.load(arch_cfg_path)['state_dict']
         #model.load_state_dict(state_dict, strict=False)
         model.load_state_dict(alpha_state_dict, strict=False)
-        import pdb; pdb.set_trace()
     return model

@@ -5,11 +5,11 @@ warmup=$2
 path="/space/risso/multi_prec_exp"
 # arch: {mix, quant}mobilenetv1_w248a248_multiprec, {mix, quant}mobilenetv1_w0248a248_multiprec
 #arch="denseae_fp"
-arch="denseae_w8a8"
+#arch="denseae_w8a8"
 #arch="denseae_w4a8"
 #arch="denseae_w2a8"
 #arch="denseae_w248a8_multiprec"
-#arch="denseae_w248a8_chan"
+arch="denseae_w248a8_chan"
 project="multi-precision-nas_andet"
 
 #tags="warmup"
