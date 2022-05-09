@@ -1,4 +1,6 @@
 from __future__ import print_function
+import copy
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -192,62 +194,139 @@ class MixQuantPaCTActiv(nn.Module):
 # DJP
 class SharedMixQuantChanConv1d(nn.Module):
 
-    def __init__(self, inplane, outplane, bits, **kwargs):
-        super(SharedMixQuantChanConv1d, self).__init__()
-        assert not kwargs['bias']
+    def __init__(self, inplane, outplane, bits, gumbel=False, **kwargs):
+        super().__init__()
+        #assert not kwargs['bias']
         self.bits = bits
+        self.gumbel = gumbel
+        kernel_size = kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
         self.alpha_weight = Parameter(torch.Tensor(len(self.bits)))
-        self.alpha_weight.data.fill_(0.01)
+        self.alpha_init = kwargs.pop('alpha_init', 'same')
+        if self.alpha_init == 'same':
+            self.alpha_weight.data.fill_(0.01)
+        elif self.alpha_init == 'scaled':
+            max_prec = max(self.bits)
+            for i in range(len(self.bits)):
+                self.alpha_weight.data[i].fill_(self.bits[i] / max_prec)
         self.conv = nn.Conv1d(inplane, outplane, **kwargs)
 
-    def forward(self, input):
+    def forward(self, input, temp, is_hard):
         mix_quant_weight = []
+        mix_wbit = 0
         # self.alpha_weight = torch.nn.Parameter(clamp(self.alpha_weight, -100, +100))
-        sw = F.softmax(self.alpha_weight, dim=0)
+        if not self.gumbel:
+            sw = F.softmax(self.alpha_weight / temp, dim=0)
+        else:
+            # If is_hard is True the output is one-hot
+            sw = F.gumbel_softmax(self.alpha_weight, tau=temp, hard=is_hard, dim=0)
         conv = self.conv
         weight = conv.weight
+        bias = getattr(conv, 'bias', None)
         for i, bit in enumerate(self.bits):
             quant_weight = _channel_asym_min_max_quantize.apply(weight, bit)
             scaled_quant_weight = quant_weight * sw[i]
             mix_quant_weight.append(scaled_quant_weight)
+            # Complexity
+            mix_wbit += sw[i] * bit
+        if bias is not None:
+            quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
+        else:
+            quant_bias = bias
         mix_quant_weight = sum(mix_quant_weight)
         out = F.conv1d(
-            input, mix_quant_weight, conv.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
-        return out
+            input, mix_quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
+         # Measure weight complexity for reg-loss
+        w_complexity = mix_wbit * self.param_size
+        return out, w_complexity
 
 
 # DJP
 class SharedMultiPrecConv1d(nn.Module):
 
-    def __init__(self, inplane, outplane, bits, **kwargs):
-        super(SharedMultiPrecConv1d, self).__init__()
-        assert not kwargs['bias']
+    def __init__(self, inplane, outplane, bits, gumbel=False, **kwargs):
+        super().__init__()
         self.bits = bits
+        self.gumbel = gumbel
+        # if True, when argmax is zero the channel is effectively pruned
+        # if False, when argmax is zero the effective weight tensor (mix_quant_weight) is used
+        self.hard_prune = False
+        self.prune = 0 in bits
         self.cout = outplane
+        if isinstance(kwargs['kernel_size'], tuple):
+            kernel_size = kwargs['kernel_size'][0] * kwargs['kernel_size'][1]
+        else:
+            kernel_size = kwargs['kernel_size'] * kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
         self.alpha_weight = Parameter(torch.Tensor(len(self.bits), self.cout))
-        self.alpha_weight.data.fill_(0.01)
+        self.alpha_init = kwargs.pop('alpha_init', 'same')
+        if self.alpha_init == 'same' or self.alpha_init is None:
+            if self.gumbel:
+                val_equiprob = 1.0 / len(self.bits)
+                init_logit = math.log(val_equiprob/(1-val_equiprob))
+            else:
+                init_logit = 0.01
+            self.alpha_weight.data.fill_(init_logit)
+        elif self.alpha_init == 'scaled':
+            max_prec = max(self.bits)
+            scaled_val = torch.tensor([bit/max_prec for bit in self.bits])
+            if self.gumbel:
+                scaled_prob = F.softmax(scaled_val, dim=0)
+                scaled_logit = torch.log(scaled_prob/(1-scaled_prob))
+            else:
+                scaled_logit = scaled_val
+            for i in range(len(self.bits)):
+                self.alpha_weight.data[i].fill_(scaled_logit[i])
+        else:
+            raise ValueError(f'Unknown alpha_init: {self.alpha_init}')
         self.conv = nn.Conv1d(inplane, outplane, **kwargs)
+        self.register_buffer('sw_buffer', torch.zeros(self.alpha_weight.shape, dtype=torch.float))
 
-    def forward(self, input):
+    def forward(self, input, temp, is_hard):
         mix_quant_weight = []
-        sw = F.softmax(self.alpha_weight, dim=0)
+        mix_wbit = 0
+        if not self.gumbel:
+            sw = F.softmax(self.alpha_weight/temp, dim=0)
+        else:
+            # If is_hard is True the output is one-hot
+            if self.training: # If model.train()
+                sw = F.gumbel_softmax(self.alpha_weight, tau=temp, hard=is_hard, dim=0)
+                self.sw_buffer = sw.clone().detach()
+            else: # If model.eval()
+                sw = self.sw_buffer
+        # Always False for now (old implementationf of hard-pruning)
+        if self.prune and self.hard_prune:
+            sw_bin = _prune_channels.apply(sw)
         conv = self.conv
         weight = conv.weight
+        bias = getattr(conv, 'bias', None)
         for i, bit in enumerate(self.bits):
             quant_weight = _channel_asym_min_max_quantize.apply(weight, bit)
             scaled_quant_weight = quant_weight * sw[i].view((self.cout, 1, 1))
             mix_quant_weight.append(scaled_quant_weight)
-        mix_quant_weight = sum(mix_quant_weight)
+            # Complexity
+            mix_wbit += sum(sw[i]) * bit
+        mix_wbit = mix_wbit / self.cout
+        if bias is not None:
+            quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
+        else:
+            quant_bias = bias
+        if self.prune and self.hard_prune:
+            mix_quant_weight = sum(mix_quant_weight) * sw_bin.view((self.cout, 1, 1))
+        else:
+            mix_quant_weight = sum(mix_quant_weight)
         out = F.conv1d(
-            input, mix_quant_weight, conv.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
-        return out
+            input, mix_quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
+        # Measure weight complexity for reg-loss
+        w_complexity = mix_wbit * self.param_size
+        return out, w_complexity
 
 
 # DJP
 class MultiPrecActivConv1d(nn.Module):
 
-    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, first_layer=False, **kwargs):
-        super(MultiPrecActivConv1d, self).__init__()
+    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, fc=None, **kwargs):
+        super().__init__()
         if wbits is None:
             self.wbits = [1, 2]
         else:
@@ -256,59 +335,109 @@ class MultiPrecActivConv1d(nn.Module):
             self.abits = [1, 2]
         else:
             self.abits = abits
+        
+        self.reg_target = kwargs.pop('reg_target', 'ops')
+
+        self.first_layer = False
+        kwargs.pop('first_layer', None)
+
+        self.fix_qtz = kwargs.pop('fix_qtz', False)
+
+        self.search_types = ['fixed', 'mixed', 'multi']
+        if fc in self.search_types:
+            self.fc = fc
+        else:
+            self.fc = False
+        self.gumbel = kwargs.pop('gumbel', False)
+        self.temp = 1
+
         # build mix-precision branches
         # TODO: change here for multi-prec activations
-        self.first_layer = first_layer
-        if self.first_layer is not True:
-            self.mix_activ = MixQuantPaCTActiv(self.abits)
+        self.mix_activ = MixQuantPaCTActiv(self.abits)
         # for multiprec, only share-weight is feasible
         assert share_weight == True
-        self.mix_weight = SharedMultiPrecConv1d(inplane, outplane, self.wbits, **kwargs)
+        if not self.fc:
+            self.mix_weight = SharedMultiPrecConv1d(inplane, outplane, self.wbits, gumbel=self.gumbel, **kwargs) 
+        else:
+            # For the final fc layer the pruning bit-width (i.e., 0) makes no sense
+            _wbits = copy.deepcopy(self.wbits)
+            if 0 in _wbits:
+                _wbits.remove(0)
+            # If the layer is fc we can use:
+            if self.fc == 'fixed':
+                # - Fixed quantization on 8bits
+                self.mix_weight = QuantMixChanConv1d(inplane, outplane, 8, **kwargs)
+            elif self.fc == 'mixed':
+                # - Mixed-precision search 
+                self.mix_weight = SharedMixQuantChanConv1d(inplane, outplane, _wbits, gumbel=self.gumbel, **kwargs)
+            elif self.fc == 'multi':
+                # - Multi-precision search
+                self.mix_weight = SharedMultiPrecConv1d(inplane, outplane, _wbits, gumbel=self.gumbel, **kwargs)
+            else:
+                raise ValueError(f"Unknown fc search, possible values are {self.search_types}")
         # complexities
         stride = kwargs['stride'] if 'stride' in kwargs else 1
-        if isinstance(kwargs['kernel_size'], tuple):
-            kernel_size = kwargs['kernel_size'][0]
-        else:
-            kernel_size = kwargs['kernel_size']
+        kernel_size = kwargs['kernel_size']
         self.param_size = inplane * outplane * kernel_size * 1e-6
         self.filter_size = self.param_size / float(stride ** 2.0)
         self.register_buffer('size_product', torch.tensor(0, dtype=torch.float))
         self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
 
-    def forward(self, input):
+    def forward(self, input, temp, is_hard):
+        self.temp = temp
         in_shape = input.shape
         tmp = torch.tensor(in_shape[1] * in_shape[2] * 1e-3, dtype=torch.float)
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
         self.size_product.copy_(tmp)
-        if self.first_layer is not True:
-            input = self.mix_activ(input)
-        out = self.mix_weight(input)
-        return out
+        if not self.fix_qtz:
+            out = self.mix_activ(input)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8)
+        out, w_complexity = self.mix_weight(out, temp, is_hard)
+        return out, w_complexity
 
     def complexity_loss(self):
-        if self.first_layer is not True:
+        if not self.first_layer:
             sw = F.softmax(self.mix_activ.alpha_activ, dim=0)
             mix_abit = 0
             abits = self.mix_activ.bits
             for i in range(len(abits)):
                 mix_abit += sw[i] * abits[i]
         else:
-            mix_abit = 32
-        sw = F.softmax(self.mix_weight.alpha_weight, dim=0)
-        mix_wbit = 0
-        wbits = self.mix_weight.bits
-        cout = self.mix_weight.cout
-        for i in range(len(wbits)):
-            mix_wbit += sum(sw[i]) * wbits[i]
-        mix_wbit = mix_wbit / cout
-        complexity = self.size_product.item() * mix_abit * mix_wbit
+            mix_abit = 8
+
+        if not self.fc or self.fc == 'multi':
+            sw = F.softmax(self.mix_weight.alpha_weight, dim=0)
+            mix_wbit = 0
+            wbits = self.mix_weight.bits
+            cout = self.mix_weight.cout
+            for i in range(len(wbits)):
+                mix_wbit += sum(sw[i]) * wbits[i]
+            mix_wbit = mix_wbit / cout
+        else:
+            if self.fc == 'fixed':
+                mix_wbit = 8
+            elif self.fc == 'mixed':
+                sw1 = F.softmax(self.mix_weight.alpha_weight, dim=0)
+                mix_wbit = 0
+                wbits = self.mix_weight.bits
+                for i in range(len(wbits)):
+                    mix_wbit += sw1[i] * wbits[i]
+
+        if self.reg_target == 'ops':
+            complexity = self.size_product.item() * mix_abit * mix_wbit
+        elif self.reg_target == 'weights':
+            complexity = self.param_size * mix_wbit
+        else:
+            raise ValueError(f"Unknown regularization target: {self.reg_target}")
+        
         return complexity
 
     def fetch_best_arch(self, layer_idx):
         size_product = float(self.size_product.cpu().numpy())
         memory_size = float(self.memory_size.cpu().numpy())
-        if self.first_layer != True:
+        if not self.first_layer:
             prob_activ = F.softmax(self.mix_activ.alpha_activ, dim=0)
             prob_activ = prob_activ.detach().cpu().numpy()
             best_activ = prob_activ.argmax()
@@ -318,16 +447,30 @@ class MultiPrecActivConv1d(nn.Module):
                 mix_abit += prob_activ[i] * abits[i]
         else:
             prob_activ = 1
-            mix_abit = 32
-        prob_weight = F.softmax(self.mix_weight.alpha_weight, dim=0)
-        prob_weight = prob_weight.detach().cpu().numpy()
-        best_weight = prob_weight.argmax(axis=0)
-        mix_wbit = 0
-        wbits = self.mix_weight.bits
-        cout = self.mix_weight.cout
-        for i in range(len(wbits)):
-            mix_wbit += sum(prob_weight[i]) * wbits[i]
-        mix_wbit = mix_wbit / cout
+            mix_abit = 8
+        if not self.fc or self.fc == 'multi':
+            prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
+            prob_weight = prob_weight.detach().cpu().numpy()
+            best_weight = prob_weight.argmax(axis=0)
+            mix_wbit = 0
+            wbits = self.mix_weight.bits
+            cout = self.mix_weight.cout
+            for i in range(len(wbits)):
+                mix_wbit += sum(prob_weight[i]) * wbits[i]
+            mix_wbit = mix_wbit / cout
+        else:
+            if self.fc == 'fixed':
+                prob_weight = 1
+                mix_wbit = 8
+            elif self.fc == 'mixed':
+                prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
+                prob_weight = prob_weight.detach().cpu().numpy()
+                best_weight = prob_weight.argmax(axis=0)
+                mix_wbit = 0
+                wbits = self.mix_weight.bits
+                for i in range(len(wbits)):
+                    mix_wbit += prob_weight[i] * wbits[i]
+
         weight_shape = list(self.mix_weight.conv.weight.shape)
         print('idx {} with shape {}, activ alpha: {}, comp: {:.3f}M * {:.3f} * {:.3f}, '
               'memory: {:.3f}K * {:.3f}'.format(layer_idx, weight_shape, prob_activ, size_product,
@@ -335,26 +478,36 @@ class MultiPrecActivConv1d(nn.Module):
         print('idx {} with shape {}, weight alpha: {}, comp: {:.3f}M * {:.3f} * {:.3f}, '
               'param: {:.3f}M * {:.3f}'.format(layer_idx, weight_shape, prob_weight, size_product,
                                                mix_abit, mix_wbit, self.param_size, mix_wbit))
-        best_wbit = sum([wbits[_] for _ in best_weight]) / cout
-        if self.first_layer != True:
+        if not self.fc or self.fc == 'multi':
+            best_wbit = sum([wbits[_] for _ in best_weight]) / cout
+        else:
+            if self.fc == 'fixed':
+                best_wbit = 8
+                best_weight = 8
+            elif self.fc == 'mixed':
+                best_wbit = wbits[best_weight]
+
+        if not self.first_layer:
             best_arch = {'best_activ': [best_activ], 'best_weight': [best_weight]}
             bitops = size_product * abits[best_activ] * best_wbit
             bita = memory_size * abits[best_activ]
         else:
-            best_arch = {'best_activ': [32], 'best_weight': [best_weight]}
-            bitops = size_product * 32 * best_wbit
-            bita = memory_size * 32
+            best_arch = {'best_activ': [8], 'best_weight': [best_weight]}
+            bitops = size_product * 8 * best_wbit
+            bita = memory_size * 8
+
         bitw = self.param_size * best_wbit
         mixbitops = size_product * mix_abit * mix_wbit
         mixbita = memory_size * mix_abit
         mixbitw = self.param_size * mix_wbit
+
         return best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw
 
 # DJP
 class MixActivChanConv1d(nn.Module):
 
-    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, first_layer=False, **kwargs):
-        super(MixActivChanConv1d, self).__init__()
+    def __init__(self, inplane, outplane, wbits=None, abits=None, share_weight=True, fc=None, **kwargs):
+        super().__init__()
         if wbits is None:
             self.wbits = [1, 2]
         else:
@@ -363,10 +516,19 @@ class MixActivChanConv1d(nn.Module):
             self.abits = [1, 2]
         else:
             self.abits = abits
+
+        self.reg_target = kwargs.pop('reg_target', 'ops')
+
+        self.first_layer = False
+        kwargs.pop('first_layer', None)
+
+        self.fix_qtz = kwargs.pop('fix_qtz', False)
+
+        self.fc = fc
+        self.gumbel = kwargs.pop('gumbel', False)
+        
         # build mix-precision branches
-        self.first_layer = first_layer
-        if self.first_layer is not True:
-            self.mix_activ = MixQuantPaCTActiv(self.abits)
+        self.mix_activ = MixQuantPaCTActiv(self.abits)
         self.share_weight = share_weight
         if share_weight:
             self.mix_weight = SharedMixQuantChanConv1d(inplane, outplane, self.wbits, **kwargs)
@@ -374,47 +536,51 @@ class MixActivChanConv1d(nn.Module):
             self.mix_weight = MixQuantChanConv1d(inplane, outplane, self.wbits, **kwargs)
         # complexities
         stride = kwargs['stride'] if 'stride' in kwargs else 1
-        if isinstance(kwargs['kernel_size'], tuple):
-            kernel_size = kwargs['kernel_size'][0]
-        else:
-            kernel_size = kwargs['kernel_size']
+        kernel_size = kwargs['kernel_size']
         self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
         self.filter_size = self.param_size / float(stride ** 2.0)
         self.register_buffer('size_product', torch.tensor(0, dtype=torch.float))
         self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
 
-    def forward(self, input):
+    def forward(self, input, temp, is_hard):
         in_shape = input.shape
         tmp = torch.tensor(in_shape[1] * in_shape[2] * 1e-3, dtype=torch.float)
         self.memory_size.copy_(tmp)
         tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
         self.size_product.copy_(tmp)
-        if self.first_layer != True:
-            input = self.mix_activ(input)
-        out = self.mix_weight(input)
-        return out
+        if not self.fix_qtz:
+            out = self.mix_activ(input, temp, is_hard)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8) 
+        out, w_complexity = self.mix_weight(out, temp, is_hard)
+        return out, w_complexity
 
     def complexity_loss(self):
-        if self.first_layer != True:
+        if not self.first_layer:
             sw = F.softmax(self.mix_activ.alpha_activ, dim=0)
             mix_abit = 0
             abits = self.mix_activ.bits
             for i in range(len(abits)):
                 mix_abit += sw[i] * abits[i]
         else:
-            mix_abit = 32
+            mix_abit = 8
         sw1 = F.softmax(self.mix_weight.alpha_weight, dim=0)
         mix_wbit = 0
         wbits = self.mix_weight.bits
         for i in range(len(wbits)):
             mix_wbit += sw1[i] * wbits[i]
-        complexity = self.size_product.item() * mix_abit * mix_wbit
+        if self.reg_target == 'ops':
+            complexity = self.size_product.item() * mix_abit * mix_wbit
+        elif self.reg_target == 'weights':
+            complexity = self.param_size * mix_wbit
+        else:
+            raise ValueError(f'Unknown regularization target: {self.reg_target}')
         return complexity
 
     def fetch_best_arch(self, layer_idx):
         size_product = float(self.size_product.cpu().numpy())
         memory_size = float(self.memory_size.cpu().numpy())
-        if self.first_layer != True:
+        if not self.first_layer:
             prob_activ = F.softmax(self.mix_activ.alpha_activ, dim=0)
             prob_activ = prob_activ.detach().cpu().numpy()
             best_activ = prob_activ.argmax()
@@ -424,7 +590,7 @@ class MixActivChanConv1d(nn.Module):
                 mix_abit += prob_activ[i] * abits[i]
         else:
             prob_activ = 1
-            mix_abit = 32
+            mix_abit = 8
         prob_weight = F.softmax(self.mix_weight.alpha_weight, dim=0)
         prob_weight = prob_weight.detach().cpu().numpy()
         best_weight = prob_weight.argmax()
@@ -442,7 +608,7 @@ class MixActivChanConv1d(nn.Module):
         print('idx {} with shape {}, weight alpha: {}, comp: {:.3f}M * {:.3f} * {:.3f}, '
               'param: {:.3f}M * {:.3f}'.format(layer_idx, weight_shape, prob_weight, size_product,
                                                mix_abit, mix_wbit, self.param_size, mix_wbit))
-        if self.first_layer != True:
+        if not self.first_layer:
             best_arch = {'best_activ': [best_activ], 'best_weight': [best_weight]}
             bitops = size_product * abits[best_activ] * wbits[best_weight]
             bita = memory_size * abits[best_activ]
@@ -574,6 +740,104 @@ class QuantMixChanConv1d(nn.Module):
             quant_bias = bias
         out = F.conv1d(
             input, quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
+        return out
+
+
+
+# MR
+class QuantMultiPrecActivConv1d(nn.Module):
+
+    def __init__(self, inplane, outplane, wbits=None, abits=None, fc=None, **kwargs):
+        super().__init__()
+        
+        self.fine_tune = kwargs.pop('fine_tune', False)
+        self.first_layer = kwargs.pop('first_layer', False)
+        self.fc = fc
+
+        self.abits = abits
+        self.wbits = wbits
+        
+        self.search_types = ['fixed', 'mixed', 'multi']
+        if fc in self.search_types:
+            self.fc = fc
+        else:
+            self.fc = False
+        self.mix_activ = QuantPaCTActiv(abits)
+        if not fc:
+            self.mix_weight = QuantMultiPrecConv1d(inplane, outplane, wbits, **kwargs)
+        else:
+            # For the final fc layer the pruning bit-width (i.e., 0) makes no sense
+            _wbits = copy.deepcopy(wbits)
+            if 0 in _wbits:
+                _wbits.remove(0)
+            # If the layer is fc we can use:
+            if self.fc == 'fixed':
+                # - Fixed quantization on 8bits
+                self.mix_weight = QuantMixChanConv1d(inplane, outplane, 8, **kwargs)
+            elif self.fc == 'mixed':
+                # - Mixed-precision search 
+                self.mix_weight = QuantMixChanConv1d(inplane, outplane, _wbits, **kwargs)
+            elif self.fc == 'multi':
+                # - Multi-precision search
+                self.mix_weight = QuantMultiPrecConv1d(inplane, outplane, _wbits, **kwargs)
+            else:
+                raise ValueError(f"Unknown fc search, possible values are {self.search_types}")
+
+        # complexities
+        stride = kwargs['stride'] if 'stride' in kwargs else 1
+        kernel_size = kwargs['kernel_size']
+        self.param_size = inplane * outplane * kernel_size / kwargs['groups'] * 1e-6
+        self.filter_size = self.param_size / float(stride ** 2.0)
+        self.register_buffer('size_product', torch.tensor(0, dtype=torch.float))
+        self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
+
+    def forward(self, input):
+        in_shape = input.shape
+        tmp = torch.tensor(in_shape[1] * in_shape[2] * 1e-3, dtype=torch.float)
+        self.memory_size.copy_(tmp)
+        tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
+        self.size_product.copy_(tmp)
+        if not self.first_layer:
+            out = self.mix_activ(input)
+        else:
+            out = _channel_asym_min_max_quantize.apply(input, 8)
+        out = self.mix_weight(out) 
+        return out
+
+
+# MR
+class QuantMultiPrecConv1d(nn.Module):
+    
+    def __init__(self, inplane, outplane, bits, **kwargs):
+        super().__init__()
+        #assert not kwargs['bias']
+        kwargs.pop('abit', None)
+        if type(bits) == int:
+            self.bits = [bits]
+        else:
+            self.bits = bits
+        self.cout = outplane
+        self.alpha_weight = Parameter(torch.Tensor(len(self.bits), self.cout), requires_grad=False)
+        self.alpha_weight.data.fill_(0.01)
+        self.conv = nn.Conv1d(inplane, outplane, **kwargs)
+
+    def forward(self, input):
+        mix_quant_weight = []
+        sw = F.one_hot(torch.argmax(self.alpha_weight, dim=0), num_classes=len(self.bits)).t()
+        conv = self.conv
+        weight = conv.weight
+        bias = getattr(conv, 'bias', None)
+        for i, bit in enumerate(self.bits):
+            quant_weight = _channel_asym_min_max_quantize.apply(weight, bit)
+            scaled_quant_weight = quant_weight * sw[i].view((self.cout, 1, 1))
+            mix_quant_weight.append(scaled_quant_weight)
+        mix_quant_weight = sum(mix_quant_weight)
+        if bias is not None:
+            quant_bias = _bias_asym_min_max_quantize.apply(bias, 32)
+        else:
+            quant_bias = bias
+        out = F.conv1d(
+            input, mix_quant_weight, quant_bias, conv.stride, conv.padding, conv.dilation, conv.groups)
         return out
 
 

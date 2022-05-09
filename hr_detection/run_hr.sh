@@ -3,15 +3,15 @@ strength=$1
 warmup=$2
 path="."
 # arch: {mix, quant}mobilenetv1_w248a248_multiprec, {mix, quant}mobilenetv1_w0248a248_multiprec
-arch="temponet_fp"
-#arch="dscnn_w8a8"
-#arch="dscnn_w248a8_multiprec"
+#arch="temponet_fp"
+#arch="temponet_w4a8"
+arch="temponet_w248a8_multiprec"
 project="multi-Precision-nas_dalia"
 
 #tags="warmup"
-tags="fp"
-#tags="w8a8"
-#tags="init_same no_wp reg_w softemp"
+#tags="fp"
+#tags="w4a8"
+tags="init_same no_wp reg_w softemp"
 
 mkdir -p ${path}/${arch}
 mkdir -p ${path}/${arch}/model_${strength}
@@ -27,7 +27,7 @@ if [[ "$3" == "search" ]]; then
         --lr 0.001 --lra 0.01 --wd 1e-4 \
         --ai same --cd ${strength} --rt weights \
         --seed 42 --gpu 0 \
-        --no-gumbel-softmax --temperature 5 --anneal-temp \
+        --no-gumbel-softmax --temperature 2 --anneal-temp \
         --visualization -pr ${project} --tags ${tags} --debug | tee ${path}/${arch}/model_${strength}/log_search_$strength.txt
 fi
 

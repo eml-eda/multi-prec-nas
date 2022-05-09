@@ -9,6 +9,7 @@ from . import quant_module_1d as qm1d
 __all__ = [
    'quanttemponet_fp', 
    'quanttemponet_w2a8', 'quanttemponet_w4a8', 'quanttemponet_w8a8',
+   'quanttemponet_w248a8_multiprec', 'quanttemponet_w248a8_chan',
 ]
 
 class TEMPONet(nn.Module):
@@ -174,6 +175,97 @@ class Classifier(nn.Module):
         return x
 
 
+######################
+## Helper Functions ##
+######################
+
+def _load_arch(arch_path, names_nbits):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    best_arch, worst_arch = {}, {}
+    for name in names_nbits.keys():
+        best_arch[name], worst_arch[name] = [], []
+    for name, params in state_dict.items():
+        name = name.split('.')[-1]
+        if name in names_nbits.keys():
+            alpha = params.cpu().numpy()
+            assert names_nbits[name] == alpha.shape[0]
+            best_arch[name].append(alpha.argmax())
+            worst_arch[name].append(alpha.argmin())
+
+    return best_arch, worst_arch
+
+# MR
+def _load_arch_multi_prec(arch_path):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    best_arch, worst_arch = {}, {}
+    best_arch['alpha_activ'], worst_arch['alpha_activ'] = [], []
+    best_arch['alpha_weight'], worst_arch['alpha_weight'] = [], []
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            alpha = params.cpu().numpy()
+            best_arch[name].append(alpha.argmax())
+            worst_arch[name].append(alpha.argmin())
+        elif name == 'alpha_weight':
+            alpha = params.cpu().numpy()
+            best_arch[name].append(alpha.argmax(axis=0))
+            worst_arch[name].append(alpha.argmin(axis=0))
+
+    return best_arch, worst_arch
+
+# MR
+def _load_alpha_state_dict(arch_path):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    alpha_state_dict = dict()
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ' or name == 'alpha_weight':
+            alpha_state_dict[full_name] = params
+
+    return alpha_state_dict
+
+# MR
+def _load_alpha_state_dict_as_mp(arch_path, model):
+    checkpoint = torch.load(arch_path)
+    state_dict = checkpoint['state_dict']
+    alpha_state_dict = dict()
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            alpha_state_dict[full_name] = params
+        elif name == 'alpha_weight':
+            mp_params = torch.tensor(model.state_dict()[full_name])
+            mp_params[0] = params[0]
+            mp_params[1] = params[1]
+            mp_params[2] = params[2]
+            alpha_state_dict[full_name] = mp_params
+
+    return alpha_state_dict
+
+# MR
+def _remove_alpha(state_dict):
+    weight_state_dict = copy.deepcopy(state_dict)
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            weight_state_dict.pop(full_name)
+        elif name == 'alpha_weight':
+            weight_state_dict.pop(full_name)
+
+    return weight_state_dict
+
+
+############
+## Models ##
+############
+
 def quanttemponet_fp(arch_cfg_path, **kwargs):
     # This precisions can be whatever
     archas, archws = [8] * 12, [8] * 12
@@ -193,3 +285,48 @@ def quanttemponet_w4a8(arch_cfg_path, **kwargs):
 def quanttemponet_w8a8(arch_cfg_path, **kwargs):
     archas, archws = [8] * 12, [8] * 12
     return TEMPONet(qm1d.QuantMixActivChanConv1d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+# qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
+def quanttemponet_w248a8_multiprec(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+
+    ## This block of code is only necessary to comply with the underlying EdMIPS code ##
+    best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w_ch in best_arch['alpha_weight']]
+    model = TEMPONet(qm1d.QuantMultiPrecActivConv1d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        state_dict = torch.load(arch_cfg_path)['state_dict']
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        # Load only alphas weights
+        alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model
+
+# MR, as mp
+def quanttemponet_w248a8_chan(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
+    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w in best_arch['alpha_weight']]
+    #assert len(archas) == 21 # 21 insead of 19 because fc activations are also quantized (the first element [8] is dummy)
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized
+    model = TEMPONet(qm1d.QuantMultiPrecActivConv1d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        checkpoint = torch.load(arch_cfg_path)
+        weight_state_dict = _remove_alpha(checkpoint['state_dict'])
+        model.load_state_dict(weight_state_dict, strict=False)
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    else:
+        # Load all weights
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        #state_dict = torch.load(arch_cfg_path)['state_dict']
+        #model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model
