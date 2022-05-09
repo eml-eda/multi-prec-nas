@@ -39,7 +39,7 @@ if [[ "$4" == "ft" ]]; then
     echo Fine-Tune
     python3 main.py ${arch}/model_${strength} -a quant${arch} -d toy_car \
         --epochs 100 --step-epoch 50 -b 512 --patience 100 \
-        --lr 0.001 --wd 0 --cd ${strength} \
+        --lr 0.0001 --wd 0 --cd ${strength} \
         --seed 42 --gpu 0 \
         --ac ${arch}/model_${strength}/arch_model_best.pth.tar -ft \
         --visualization -pr ${project} --tags ${tags} | tee ${arch}/model_${strength}/log_finetune_$strength.txt
