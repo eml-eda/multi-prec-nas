@@ -549,7 +549,7 @@ class MixActivChanConv1d(nn.Module):
         tmp = torch.tensor(self.filter_size * in_shape[-1], dtype=torch.float)
         self.size_product.copy_(tmp)
         if not self.fix_qtz:
-            out = self.mix_activ(input, temp, is_hard)
+            out = self.mix_activ(input)
         else:
             out = _channel_asym_min_max_quantize.apply(input, 8) 
         out, w_complexity = self.mix_weight(out, temp, is_hard)
