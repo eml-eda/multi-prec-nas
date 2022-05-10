@@ -486,6 +486,7 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
         # Anneal temperature 
         if args.anneal_temp and scope == 'Search':
             temp = anneal_temperature(temp)
+            print(f'Temperature: {temp}')
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
