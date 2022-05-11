@@ -323,7 +323,7 @@ class TinyMLResNet(nn.Module):
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, groups = 1, padding=1, bias=False)
         self.conv1 = conv3x3(conv_func, 3, 16, stride=1, groups=1, **kwargs)
         self.bn1 = nn.BatchNorm2d(16)
-        self.relu = nn.ReLU(inplace=True)
+        #self.relu = nn.ReLU(inplace=True)
         self.model = Backbone(conv_func, input_size, bnaff, **kwargs)
         #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         #self.layer1 = self._make_layer(

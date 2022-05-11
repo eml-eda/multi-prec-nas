@@ -1,10 +1,14 @@
 import argparse
 import os
+import math
 import pathlib
 import random
 import shutil
+import sys
 import time
 import warnings
+
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
 
 import numpy as np
 
@@ -37,18 +41,20 @@ parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
 parser.add_argument('--arch-data-split', type=float, default=None, 
                     help='Split of the data to use for the update of alphas')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
+parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet8',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
-                        ' (default: resnet18)')
+                        ' (default: resnet8)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('-d', '--dataset', default='None', type=str,
                     help='cifar or imagenet')
-parser.add_argument('--epochs', default=90, type=int, metavar='N',
+parser.add_argument('--epochs', default=500, type=int, metavar='N',
                     help='number of total epochs to run')
-parser.add_argument('--step-epoch', default=30, type=int, metavar='N',
+parser.add_argument('--patience', default=20, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
+parser.add_argument('--step-epoch', default=50, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
@@ -57,12 +63,12 @@ parser.add_argument('--warmup', default=0, type=int,
                         '(default: 0 -> no warmup)')
 parser.add_argument('--warmup-8bit', action='store_true', default=False,
                     help='Use model pretrained on 8-bit as starting point')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=32, type=int,
                     metavar='N',
-                    help='mini-batch size (default: 256), this is the total '
+                    help='mini-batch size (default: 32), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--lra', '--learning-rate-alpha', default=0.01, type=float,
                     metavar='LR', help='initial alpha learning rate')
@@ -245,12 +251,11 @@ def main_worker(gpu, ngpus_per_node, args):
     elif 'cifar' in args.dataset:
         num_classes = 10
 
-        # Data prep following https://github.com/kuangliu/pytorch-cifar
         transform_train = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            #transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            transforms.RandomRotation(15),
+            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.ToTensor(), 
         ])
 
         transform_test = transforms.Compose([
@@ -273,16 +278,30 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             train_sampler = None
 
-        trainset = torchvision.datasets.CIFAR10(root=args.data, train=True,
+        train_set = torchvision.datasets.CIFAR10(root=args.data, train=True,
                                                 download=True, transform=transform_train)
 
-        testset = torchvision.datasets.CIFAR10(root=args.data, train=False,
+        test_set = torchvision.datasets.CIFAR10(root=args.data, train=False,
                                                download=True, transform=transform_test)
+        
+        # Split dataset into train and validation
+        train_len = int(len(train_set) * 0.8)
+        val_len = len(train_set) - train_len
+        # Fix generator seed for reproducibility
+        data_gen = torch.Generator().manual_seed(args.seed)
+        train_dataset, val_dataset = torch.utils.data.random_split(train_set, [train_len, val_len], generator=data_gen)
+
         train_loader = torch.utils.data.DataLoader(
-            trainset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+            train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
             num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-        val_loader = torch.utils.data.DataLoader(testset,
+        val_loader = torch.utils.data.DataLoader(val_dataset,
+            batch_size=args.batch_size, shuffle=True,
+            num_workers=args.workers, pin_memory=True)
+        
+        _idxs = np.load('perf_samples_idxs.npy')
+        test_set = torch.utils.data.Subset(test_set, _idxs)
+        test_loader = torch.utils.data.DataLoader(test_set,
             batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
 
@@ -290,7 +309,9 @@ def main_worker(gpu, ngpus_per_node, args):
     print("=> creating model '{}'".format(args.arch))
     model = models.__dict__[args.arch](num_classes=num_classes, 
                                         reg_target=args.regularization_target,
-                                        alpha_init=args.alpha_init)
+                                        alpha_init=args.alpha_init,
+                                        gumbel=args.gumbel_softmax
+                                        )
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -332,16 +353,13 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             params += [param]
 
-    optimizer = torch.optim.SGD(params, args.lr,
+    optimizer = torch.optim.Adam(params, args.lr,
                           momentum=args.momentum,
                           weight_decay=args.weight_decay)
     arch_optimizer = torch.optim.SGD(alpha_params, args.lra, momentum=args.momentum,
                                weight_decay=args.alpha_decay)
     #arch_optimizer = torch.optim.Adam(alpha_params, args.lra, weight_decay=args.weight_decay)
     
-    # Alternative scheduling from https://github.com/kuangliu/pytorch-cifar
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
-
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -385,7 +403,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # If warmup is enabled check if pretrained model exists
     if args.warmup != 0 and not args.warmup_8bit:
-        warmup_pretrained_checkpoint = args.data.parent / 'saved_models' / ('warmup_' + str(args.warmup) + '.pth.tar')
+        warmup_pretrained_checkpoint = args.data.parent / ('warmup_' + str(args.warmup) + '.pth.tar')
         if warmup_pretrained_checkpoint.exists():
             print(f"=> loading pretrained model '{warmup_pretrained_checkpoint}'")
             checkpoint = torch.load(warmup_pretrained_checkpoint)
@@ -410,7 +428,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 if 'alpha' in name:
                     param.requires_grad = True
     elif args.warmup_8bit:
-        pretrained_checkpoint = args.data.parent / 'saved_models' / ('warmup_8bit.pth.tar')
+        pretrained_checkpoint = args.data.parent / ('warmup_8bit.pth.tar')
         state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
@@ -528,8 +546,9 @@ def main_worker(gpu, ngpus_per_node, args):
     #        wandb.log({'table_w': wandb_table_w})
 
     # Search
-    best_epoch, best_acc1 = train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, 
-                                    scope='Search', train_sampler=train_sampler)
+    best_epoch, best_acc1, best_acc1_test = \
+        train(train_loader, val_loader, test_loader, model, criterion, optimizer, arch_optimizer, args, 
+            scope='Search', train_sampler=train_sampler)
 
     # Visualization: bar-plot with fraction of chosen precisions for each layer
     if args.visualization and (not args.debug):
@@ -548,13 +567,20 @@ def main_worker(gpu, ngpus_per_node, args):
                 data = table_w, 
                 columns = ['precision', 'fraction'])
         wandb.log({'table_w': wandb_table_w})
+    
+    best_acc1_val = best_acc1 
+    print('Best Acc_val@1 {0} @ epoch {1}'.format(best_acc1_val, best_epoch))
 
-    print('Best Acc@1 {0} @ epoch {1}'.format(best_acc1, best_epoch))
+    test_acc1 = best_acc1_test
+    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch))
 
 
-def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Search', train_sampler=None):
+def train(train_loader, val_loader, test_loader, model, criterion, optimizer, arch_optimizer, args, scope='Search'):
     best_epoch = args.start_epoch
+    best_epoch_test = args.start_epoch
     best_acc1 = 0
+    best_acc1_test = 0
+    epoch_wout_improve = 0
     temp = args.temperature
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -574,10 +600,10 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
             len_data_w = len(data) - len_data_a
             data_w, data_a = torch.utils.data.random_split(data, [len_data_w, len_data_a])
             train_loader_w = torch.utils.data.DataLoader(
-                data_w, batch_size=None, shuffle=True, 
+                data_w, batch_size=args.batch_size, shuffle=True, 
                 num_workers=args.workers, pin_memory=True)
             train_loader_a = torch.utils.data.DataLoader(
-                data_a, batch_size=None, shuffle=True, 
+                data_a, batch_size=args.batch_size, shuffle=True, 
                 num_workers=args.workers, pin_memory=True)
             # Freeze normal weights and train on alpha weights
             model = freeze_weights(model, freeze=True)
@@ -590,9 +616,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
         else:
             train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope=scope)
 
-        #adjust_learning_rate(optimizer, arch_optimizer, epoch, args)
-        # Alternative scheduling from https://github.com/kuangliu/pytorch-cifar
-        scheduler.step()
+        adjust_learning_rate(optimizer, epoch, args)
 
         print('========= architecture =========')
         if hasattr(model, 'module'):
@@ -608,6 +632,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, epoch, args, temp, scope=scope)
+        acc1_test = validate(test_loader, model, criterion, epoch, args, temp, scope=scope)
 
         # Anneal temperature 
         if args.anneal_temp and scope == 'Search':
@@ -615,9 +640,15 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
         if is_best:
             best_epoch = epoch
+            best_acc1 = acc1
+            best_acc1_test = acc1_test
+            epoch_wout_improve = 0
+            print(f'New best Acc_val: {best_acc1}')
+            print(f'New best Acc_test: {best_acc1_test}')
+        else:
+            epoch_wout_improve += 1
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -626,6 +657,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'best_acc1': best_acc1,
+                'best_acc1_test': best_acc1_test,
                 'optimizer': optimizer.state_dict(),
                 'arch_optimizer': arch_optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch, args, scope=scope)
@@ -705,7 +737,11 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                     data = table_w, 
                     columns = ['precision', 'fraction'])
             wandb.log({'table_w': wandb_table_w})
-    return best_epoch, best_acc1
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
+    return best_epoch, best_acc1, best_acc1_test
 
 def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope='Search'):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -827,7 +863,7 @@ def validate(val_loader, model, criterion, epoch, args, temp, scope='Search'):
 
         # TODO: this should also be done with the ProgressMeter
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-              .format(top1=top1, top5=top5))
+              .format(top1=top1.avg, top5=top5.avg))
     
     # Visualization
     if args.visualization:
@@ -895,14 +931,12 @@ class ProgressMeter(object):
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
 
 
-def adjust_learning_rate(optimizer, arch_optimizer, epoch, args):
-    """Sets the learning rate to the initial LR decayed by 10 every step_epochs"""
-    lr = args.lr * (0.1 ** (epoch // args.step_epoch))
-    lra = args.lra * (0.1 ** (epoch // args.step_epoch))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
-    for param_group in arch_optimizer.param_groups:
-        param_group['lr'] = lra
+def adjust_learning_rate(optimizer, epoch, args):
+    initial_learning_rate = 0.001
+    decay_per_epoch = 0.99
+    lrate = initial_learning_rate * (decay_per_epoch ** epoch)
+    for opt in optimizer.param_groups:
+        opt['lr'] = lrate
 
 def anneal_temperature(temperature):
     # FbNetV2-like annealing
