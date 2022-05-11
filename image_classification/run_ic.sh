@@ -4,7 +4,8 @@ strength=$1
 warmup=$2
 path="."
 
-arch="res8_fp"
+#arch="res8_fp"
+arch="res8_w8a8"
 #arch="res8_w248a8_chan"
 
 project="multi-precision-nas_ic"
@@ -44,7 +45,7 @@ if [[ "$4" == "ft" ]]; then
 else
     echo From-Scratch
     python3 main.py data -a quant${arch} \
-        -d cifar --epochs 100 --step-epoch 10 -b 32 --patience 100 \
+        -d cifar --epochs 500 --step-epoch 10 -b 32 --patience 100 \
         --lr 0.001 --wd 1e-4 \
         --seed 42 --gpu 0 \
         --ac ${arch}/model_${strength}/arch_model_best.pth.tar | tee ${path}/${arch}/model_${strength}/log_fromscratch_${strength}.txt

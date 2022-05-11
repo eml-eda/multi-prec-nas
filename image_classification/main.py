@@ -320,7 +320,6 @@ def main_worker(gpu, ngpus_per_node, args):
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
     optimizer = torch.optim.Adam(model.parameters(), args.lr,
-                                momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     
     # optionally resume from a checkpoint
@@ -417,6 +416,7 @@ def main_worker(gpu, ngpus_per_node, args):
             print(f'New best Acc_test: {best_acc1_test}')
         else:
             epoch_wout_improve += 1
+            print(f'Epoch without improvement: {epoch_wout_improve}')
 
         #print('========= architecture info =========')
         #if hasattr(model, 'module'):

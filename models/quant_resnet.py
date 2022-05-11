@@ -280,6 +280,7 @@ class TinyMLResNet(nn.Module):
         else:
             self.qtz_fc = False
         super().__init__()
+        kwargs['groups'] = 1
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, **kwargs)

@@ -354,7 +354,6 @@ def main_worker(gpu, ngpus_per_node, args):
             params += [param]
 
     optimizer = torch.optim.Adam(params, args.lr,
-                          momentum=args.momentum,
                           weight_decay=args.weight_decay)
     arch_optimizer = torch.optim.SGD(alpha_params, args.lra, momentum=args.momentum,
                                weight_decay=args.alpha_decay)
@@ -649,6 +648,7 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
             print(f'New best Acc_test: {best_acc1_test}')
         else:
             epoch_wout_improve += 1
+            print(f'Epoch without improvement: {epoch_wout_improve}')
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
