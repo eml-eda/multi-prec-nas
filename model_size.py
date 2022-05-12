@@ -24,7 +24,7 @@ else:
 model_name = str(args.arch).split('quant')[1].split('_')[0]
 if model_name == 'mobilenetv1':
     rnd_input = torch.randn(1, 3, 96, 96)
-elif model_name == 'resnet18':
+elif model_name == 'resnet18' or model_name == 'res8':
     rnd_input = torch.randn(1, 3, 32, 32)
 elif model_name == 'dscnn':
     rnd_input = torch.randn(1, 1, 49, 10)
@@ -37,8 +37,10 @@ else:
 with torch.no_grad():
     model(rnd_input)
 
-bitops, bita, bitw, peak_mem_layer, peak_mem_bitw = model.fetch_arch_info()
-#bitops, bita, bitw = model.fetch_arch_info()
+try:
+    bitops, bita, bitw, peak_mem_layer, peak_mem_bitw = model.fetch_arch_info()
+except:
+    bitops, bita, bitw = model.fetch_arch_info()
 
 print(f'bitops: {bitops}')
 print(f'bita: {bita}')
