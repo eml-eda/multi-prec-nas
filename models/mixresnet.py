@@ -60,7 +60,6 @@ class Backbone(nn.Module):
         w_complexity += w_comp
         x, w_comp = self.bb_3(x, temp, is_hard)
         w_complexity += w_comp
-        import pdb; pdb.set_trace() # CHECK DIM!!!
         x = self.pool(x)
         return x, w_complexity
 
@@ -111,6 +110,8 @@ class BasicBlockGumbel(nn.Module):
             self.downsample = conv_func(inplanes, planes, kernel_size=1,
                 stride=stride,  groups=1, bias=False, **kwargs)
             self.bn_ds = nn.BatchNorm2d(planes)
+        else:
+            self.downsample = None
 
     def forward(self, x, temp, is_hard):
         #out = self.bn0(x)

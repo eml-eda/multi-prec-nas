@@ -5,11 +5,11 @@ warmup=$2
 path="."
 
 #arch="res8_fp"
-arch="res8_w8a8"
+#arch="res8_w8a8"
 #arch="res8_w4a8"
 #arch="res8_w2a8"
 #arch="res8_w248a8_chan"
-#arch="res8_w248a8_multiprec"
+arch="res8_w248a8_multiprec"
 
 project="multi-precision-nas_ic"
 
@@ -34,7 +34,7 @@ if [[ "$3" == "search" ]]; then
         --ai same --cd ${strength} --rt weights \
         --seed 42 --gpu 0 \
         --no-gumbel-softmax --temperature 5 --anneal-temp \
-        --visualization -pr ${project} --tags ${tags} --debug | tee ${path}/${arch}/model_${strength}/log_search_${strength}.txt
+        --visualization -pr ${project} --tags ${tags} | tee ${path}/${arch}/model_${strength}/log_search_${strength}.txt
 fi
 
 if [[ "$4" == "ft" ]]; then

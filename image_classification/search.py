@@ -431,7 +431,6 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.warmup_8bit:
         pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
         state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
-        import pdb; pdb.set_trace()
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
@@ -550,7 +549,7 @@ def main_worker(gpu, ngpus_per_node, args):
     # Search
     best_epoch, best_acc1, best_acc1_test = \
         train(train_loader, val_loader, test_loader, model, criterion, optimizer, arch_optimizer, args, 
-            scope='Search', train_sampler=train_sampler)
+            scope='Search')
 
     # Visualization: bar-plot with fraction of chosen precisions for each layer
     if args.visualization and (not args.debug):
@@ -865,8 +864,7 @@ def validate(val_loader, model, criterion, epoch, args, temp, scope='Search'):
                 progress.display(i)
 
         # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-              .format(top1=top1.avg, top5=top5.avg))
+        print(f' * Acc@1 {top1.avg} Acc@5 {top5.avg}')
     
     # Visualization
     if args.visualization:
