@@ -33,7 +33,7 @@ class Backbone(nn.Module):
             bnaff=True, **kwargs)
         self.bb_3 = BasicBlock(conv_func, 32, 64, wbits[5:7], abits[5:7], stride=2,
             bnaff=True, **kwargs)
-        self.pool = nn.AvgPool2d(kernel_size=4)
+        self.pool = nn.AvgPool2d(kernel_size=8)
     
     def forward(self, x):
         x = self.bb_1(x)
@@ -308,7 +308,7 @@ class TinyMLResNet(nn.Module):
         kwargs['groups'] = 1
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, **kwargs)
+        self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, padding=1, **kwargs)
         self.bn1 = nn.BatchNorm2d(16, affine=bnaff)
         self.model = Backbone(conv_func, input_size, bnaff, abits=archas[1:-1], wbits=archws[1:-1], **kwargs)
         #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)

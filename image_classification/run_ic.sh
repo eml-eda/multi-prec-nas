@@ -6,6 +6,8 @@ path="."
 
 #arch="res8_fp"
 arch="res8_w8a8"
+#arch="res8_w4a8"
+#arch="res8_w2a8"
 #arch="res8_w248a8_chan"
 #arch="res8_w248a8_multiprec"
 

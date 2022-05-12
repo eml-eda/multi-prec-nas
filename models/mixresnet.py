@@ -50,7 +50,7 @@ class Backbone(nn.Module):
             bnaff=True, **kwargs)
         self.bb_3 = BasicBlockGumbel(conv_func, 32, 64, stride=2,
             bnaff=True, **kwargs)
-        self.pool = nn.AvgPool2d(kernel_size=4)
+        self.pool = nn.AvgPool2d(kernel_size=8)
     
     def forward(self, x, temp, is_hard):
         w_complexity = 0
@@ -60,6 +60,7 @@ class Backbone(nn.Module):
         w_complexity += w_comp
         x, w_comp = self.bb_3(x, temp, is_hard)
         w_complexity += w_comp
+        import pdb; pdb.set_trace() # CHECK DIM!!!
         x = self.pool(x)
         return x, w_complexity
 
