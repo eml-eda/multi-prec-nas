@@ -545,8 +545,7 @@ def validate(val_loader, model, criterion, epoch, args):
                 progress.display(i)
 
         # TODO: this should also be done with the ProgressMeter
-        print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-              .format(top1=top1, top5=top5))
+        print(f' * Acc@1 {top1.avg:.6f} Acc@5 {top5.avg:.6f}')
 
     # Visualization
     if args.visualization:
@@ -555,7 +554,6 @@ def validate(val_loader, model, criterion, epoch, args):
                 "Test/Loss": losses.avg, 
                 "Test/Acc": top1.avg
             })
-
     return top1.avg
 
 

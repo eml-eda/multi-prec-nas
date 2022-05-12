@@ -829,8 +829,8 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
 def validate(val_loader, model, criterion, epoch, args, temp, scope='Search'):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    top1 = AverageMeter('Acc@1', ':6.2f')
-    top5 = AverageMeter('Acc@5', ':6.2f')
+    top1 = AverageMeter('Acc@1', ':6.4f')
+    top5 = AverageMeter('Acc@5', ':6.4f')
     progress = ProgressMeter(
         len(val_loader),
         [batch_time, losses, top1, top5],

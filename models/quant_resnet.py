@@ -888,7 +888,7 @@ def quantres8_w248a8_multiprec(arch_cfg_path, **kwargs):
     assert len(archws) == 10 # 10 instead of 8 because conv1 and fc weights are also quantized 
     ##
 
-    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivConv2d, [1, 1, 1], archws, archas, qtz_fc='multi', **kwargs)
+    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
     if kwargs['fine_tune']:
         # Load all weights
         state_dict = torch.load(arch_cfg_path)['state_dict']
@@ -916,10 +916,10 @@ def quantres8_w248a8_chan(arch_cfg_path, **kwargs):
     ##
     name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
     best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
-    archas = [abits[a] for a in best_arch['alpha_activ']]
-    archws = [wbits[w] for w in best_arch['alpha_weight']]
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w in best_arch['alpha_weight']]
 
-    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivChanConv2d, [1, 1, 1], archws, archas, qtz_fc='multi', **kwargs)
+    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
     if kwargs['fine_tune']:
         # Load all weights
         checkpoint = torch.load(arch_cfg_path)
