@@ -250,11 +250,13 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         else:
             train_sampler = None
-        
-        train_set = torchvision.datasets.CIFAR10(root=args.data, train=True,
+
+        data_dir = args.data.parent.parent / 'data'
+
+        train_set = torchvision.datasets.CIFAR10(root=data_dir, train=True,
                                                 download=True, transform=transform_train)
 
-        test_set = torchvision.datasets.CIFAR10(root=args.data, train=False,
+        test_set = torchvision.datasets.CIFAR10(root=data_dir, train=False,
                                                download=True, transform=transform_test)
 
         # Split dataset into train and validation

@@ -38,7 +38,7 @@ def conv7x7(conv_func, in_planes, out_planes, stride=1, groups = 1, first_layer=
 def fc(conv_func, in_planes, out_planes, stride=1, groups = 1, search_fc=None, **kwargs):
     "fc mapped to conv"
     return conv_func(in_planes, out_planes, kernel_size=1, groups = groups, stride=stride,
-                     padding=0, bias=False, fc=search_fc, **kwargs)
+                     padding=0, bias=True, fc=search_fc, **kwargs)
 
 # MR
 class Backbone(nn.Module):
@@ -493,12 +493,12 @@ def mixres8_w0248a8_multiprec(**kwargs):
 
 # MR
 def mixres8_w248a8_multiprec(**kwargs):
-    return TinyMLResNet(BasicBlock, qm.MultiPrecActivConv2d, [1, 1, 1], search_fc='multi', wbits=[2, 4, 8], abits=[8],
-                  share_weight=True, **kwargs)
+    return TinyMLResNet(BasicBlock, qm.MultiPrecActivConv2d, search_fc='multi', wbits=[2, 4, 8], abits=[8],
+                share_weight=True, **kwargs)
 
 # MR
 def mixres8_w248a8_chan(**kwargs):
-    return TinyMLResNet(BasicBlock, qm.MixActivChanConv2d, [1, 1, 1], search_fc='mixed', wbits=[2, 4, 8], abits=[8],
+    return TinyMLResNet(BasicBlock, qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[8],
                   share_weight=True, **kwargs)
 
 # MR

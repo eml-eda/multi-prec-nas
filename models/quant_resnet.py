@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn as nn
 import math
@@ -22,15 +23,33 @@ __all__ = [
 ]
 
 
+# MR
+class Backbone(nn.Module):
+    def __init__(self, conv_func, input_size, bnaff, abits, wbits, **kwargs):
+        super().__init__()
+        self.bb_1 = BasicBlock(conv_func, 16, 16, wbits[:2], abits[:2], stride=1,
+            bnaff=True, **kwargs)
+        self.bb_2 = BasicBlock(conv_func, 16, 32, wbits[2:5], abits[2:5], stride=2,
+            bnaff=True, **kwargs)
+        self.bb_3 = BasicBlock(conv_func, 32, 64, wbits[5:7], abits[5:7], stride=2,
+            bnaff=True, **kwargs)
+        self.pool = nn.AvgPool2d(kernel_size=4)
+    
+    def forward(self, x):
+        x = self.bb_1(x)
+        x = self.bb_2(x)
+        x = self.bb_3(x)
+        x = self.pool(x)
+        return x
+
+
 class BasicBlock(nn.Module):
     expansion = 1
     num_layers = 2
 
     def __init__(self, conv_func, inplanes, planes, archws, archas, stride=1,
                  downsample=None, bnaff=True, **kwargs):
-        super(BasicBlock, self).__init__()
-        assert len(archws) == 2
-        assert len(archas) == 2
+        super().__init__()
         #self.bn0 = nn.BatchNorm2d(inplanes, affine=bnaff)
         self.conv1 = conv_func(inplanes, planes, archws[0], archas[0], kernel_size=3, stride=stride,
                                padding=1, bias=False, **kwargs)
@@ -38,7 +57,12 @@ class BasicBlock(nn.Module):
         self.conv2 = conv_func(planes, planes, archws[1], archas[1], kernel_size=3, stride=1,
                                padding=1, bias=False, **kwargs)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = downsample
+        if stride != 1 or inplanes != planes:
+            self.downsample = conv_func(inplanes, planes, archws[-1], archas[-1], kernel_size=1,
+                stride=stride, bias=False, **kwargs)
+            self.bn_ds = nn.BatchNorm2d(planes)
+        else:
+            self.downsample = None
 
     def forward(self, x):
         #out = self.bn0(x)
@@ -54,6 +78,7 @@ class BasicBlock(nn.Module):
 
         if self.downsample is not None:
             residual = self.downsample(residual)
+            residual = self.bn_ds(residual)
 
         out += residual
 
@@ -268,7 +293,7 @@ class ResNet(nn.Module):
 
 class TinyMLResNet(nn.Module):
 
-    def __init__(self, block, conv_func, layers, archws, archas, qtz_fc=None, input_size=32, num_classes=1000,
+    def __init__(self, block, conv_func, archws, archas, qtz_fc=None, input_size=32, num_classes=1000,
                  bnaff=True, **kwargs):
         print('archas: {}'.format(archas))
         print('archws: {}'.format(archws))
@@ -285,28 +310,28 @@ class TinyMLResNet(nn.Module):
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, **kwargs)
         self.bn1 = nn.BatchNorm2d(16, affine=bnaff)
-        self.relu = nn.ReLU(inplace=True)
+        self.model = Backbone(conv_func, input_size, bnaff, abits=archas[1:-1], wbits=archws[1:-1], **kwargs)
         #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        eid = block.num_layers * layers[0] + (block.expansion > 1) + 1
-        self.layer1 = self._make_layer(block, conv_func, 16, layers[0], archws[1:eid], archas[1:eid],
-                                       bnaff=bnaff, **kwargs)
-        sid = eid
-        eid = sid + block.num_layers * layers[1] + 1
-        self.layer2 = self._make_layer(
-            block, conv_func, 32, layers[1], archws[sid:eid], archas[sid:eid],
-            stride=2, bnaff=bnaff, **kwargs
-        )
-        sid = eid
-        eid = sid + block.num_layers * layers[2] + 1
-        self.layer3 = self._make_layer(
-            block, conv_func, 64, layers[2], archws[sid:eid], archas[sid:eid],
-            stride=2, bnaff=bnaff, **kwargs
-        )
-        #self.avgpool = nn.AvgPool2d(int(input_size/(2**5)))
-        self.avgpool = nn.AvgPool2d(kernel_size=8)
+        #eid = block.num_layers * layers[0] + (block.expansion > 1) + 1
+        #self.layer1 = self._make_layer(block, conv_func, 16, layers[0], archws[1:eid], archas[1:eid],
+        #                               bnaff=bnaff, **kwargs)
+        #sid = eid
+        #eid = sid + block.num_layers * layers[1] + 1
+        #self.layer2 = self._make_layer(
+        #    block, conv_func, 32, layers[1], archws[sid:eid], archas[sid:eid],
+        #    stride=2, bnaff=bnaff, **kwargs
+        #)
+        #sid = eid
+        #eid = sid + block.num_layers * layers[2] + 1
+        #self.layer3 = self._make_layer(
+        #    block, conv_func, 64, layers[2], archws[sid:eid], archas[sid:eid],
+        #    stride=2, bnaff=bnaff, **kwargs
+        #)
+        ##self.avgpool = nn.AvgPool2d(int(input_size/(2**5)))
+        #self.avgpool = nn.AvgPool2d(kernel_size=8)
         if self.qtz_fc:
             self.fc = conv_func(64 * block.expansion, num_classes, abits=archas[-1], wbits=archws[-1], 
-                kernel_size=1, stride=1, bias=False, fc=self.qtz_fc, **kwargs)
+                kernel_size=1, stride=1, bias=True, fc=self.qtz_fc, **kwargs)
         else:
             self.fc = nn.Linear(64 * block.expansion, num_classes)
 
@@ -349,17 +374,18 @@ class TinyMLResNet(nn.Module):
 
     def forward(self, x):
         x = self.conv1(x)
-        #x = self.maxpool(x)
         x = self.bn1(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
+        #x = self.layer1(x)
+        #x = self.layer2(x)
+        #x = self.layer3(x)
 
-        x = self.relu(x)
+        x = self.model(x)
+
+        #x = self.relu(x)
         #assert x.shape[2] == 7
         #assert x.shape[3] == 7
-        x = self.avgpool(x)
+        #x = self.avgpool(x)
         x = x if self.qtz_fc else x.view(x.size(0), -1)
         x = self.fc(x)[:, :, 0, 0] if self.qtz_fc else self.fc(x)
 
@@ -401,7 +427,6 @@ def _load_arch(arch_path, names_nbits):
 
     return best_arch, worst_arch
 
-
 # MR
 def _load_arch_multi_prec(arch_path):
     checkpoint = torch.load(arch_path)
@@ -410,6 +435,7 @@ def _load_arch_multi_prec(arch_path):
     best_arch['alpha_activ'], worst_arch['alpha_activ'] = [], []
     best_arch['alpha_weight'], worst_arch['alpha_weight'] = [], []
     for name, params in state_dict.items():
+        full_name = name
         name = name.split('.')[-1]
         if name == 'alpha_activ':
             alpha = params.cpu().numpy()
@@ -476,6 +502,19 @@ def _load_alpha_state_dict_as_mp(arch_path, model):
             alpha_state_dict[full_name] = mp_params
 
     return alpha_state_dict
+
+# MR
+def _remove_alpha(state_dict):
+    weight_state_dict = copy.deepcopy(state_dict)
+    for name, params in state_dict.items():
+        full_name = name
+        name = name.split('.')[-1]
+        if name == 'alpha_activ':
+            weight_state_dict.pop(full_name)
+        elif name == 'alpha_weight':
+            weight_state_dict.pop(full_name)
+
+    return weight_state_dict
 
 # MR
 # Questo era per la conv splittata in tre, per ora lo lascio ...
@@ -880,11 +919,14 @@ def quantres8_w248a8_chan(arch_cfg_path, **kwargs):
     archas = [abits[a] for a in best_arch['alpha_activ']]
     archws = [wbits[w] for w in best_arch['alpha_weight']]
 
-    model = TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, [1, 1, 1], archws, archas, qtz_fc='mixed', **kwargs)
+    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivChanConv2d, [1, 1, 1], archws, archas, qtz_fc='multi', **kwargs)
     if kwargs['fine_tune']:
         # Load all weights
-        state_dict = torch.load(arch_cfg_path)['state_dict']
-        model.load_state_dict(state_dict, strict = False)
+        checkpoint = torch.load(arch_cfg_path)
+        weight_state_dict = _remove_alpha(checkpoint['state_dict'])
+        model.load_state_dict(weight_state_dict, strict=False)
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        model.load_state_dict(alpha_state_dict, strict=False)
     else:
         # Load only alphas weights
         alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
@@ -1014,7 +1056,7 @@ def quantres8_fp(arch_cfg_path, **kwargs):
     archas, archws = [8] * 10, [8] * 10
     assert len(archas) == 10
     assert len(archws) == 10
-    return TinyMLResNet(BasicBlock, qm.FpConv2d, [1, 1, 1], archws, archas, **kwargs)
+    return TinyMLResNet(BasicBlock, qm.FpConv2d, archws, archas, **kwargs)
 
 # MR
 def quantres8_w2a8(arch_cfg_path, **kwargs):
@@ -1022,7 +1064,7 @@ def quantres8_w2a8(arch_cfg_path, **kwargs):
     archas, archws = [8] * 10, [2] * 10
     assert len(archas) == 10
     assert len(archws) == 10
-    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, [1, 1, 1], archws, archas, **kwargs)
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
 
 # MR
 def quantres8_w4a8(arch_cfg_path, **kwargs):
@@ -1030,7 +1072,7 @@ def quantres8_w4a8(arch_cfg_path, **kwargs):
     archas, archws = [8] * 10, [4] * 10
     assert len(archas) == 10
     assert len(archws) == 10
-    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, [1, 1, 1], archws, archas, **kwargs)
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
 
 # MR
 def quantres8_w8a8(arch_cfg_path, **kwargs):
@@ -1038,7 +1080,7 @@ def quantres8_w8a8(arch_cfg_path, **kwargs):
     archas, archws = [8] * 10, [8] * 10
     assert len(archas) == 10
     assert len(archws) == 10
-    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, [1, 1, 1], archws, archas, **kwargs)
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
 
 # MR
 def quantres8_w32a8(arch_cfg_path, **kwargs):

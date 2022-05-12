@@ -278,10 +278,12 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             train_sampler = None
 
-        train_set = torchvision.datasets.CIFAR10(root=args.data, train=True,
+        data_dir = args.data.parent.parent / 'data'
+
+        train_set = torchvision.datasets.CIFAR10(root=data_dir, train=True,
                                                 download=True, transform=transform_train)
 
-        test_set = torchvision.datasets.CIFAR10(root=args.data, train=False,
+        test_set = torchvision.datasets.CIFAR10(root=data_dir, train=False,
                                                download=True, transform=transform_test)
         
         # Split dataset into train and validation
@@ -427,8 +429,9 @@ def main_worker(gpu, ngpus_per_node, args):
                 if 'alpha' in name:
                     param.requires_grad = True
     elif args.warmup_8bit:
-        pretrained_checkpoint = args.data.parent / ('warmup_8bit.pth.tar')
+        pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
         state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        import pdb; pdb.set_trace()
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')

@@ -7,6 +7,7 @@ path="."
 #arch="res8_fp"
 arch="res8_w8a8"
 #arch="res8_w248a8_chan"
+#arch="res8_w248a8_multiprec"
 
 project="multi-precision-nas_ic"
 
@@ -23,7 +24,7 @@ export WANDB_MODE=offline
 if [[ "$3" == "search" ]]; then
     echo Search
     split=0.2
-    python3 search.py data -a mix${arch} \
+    python3 search.py ${path}/${arch}/model_${strength} -a mix${arch} \
         -d cifar --arch-data-split ${split} \
         --epochs 500 --step-epoch 50 -b 32 \
         --warmup ${warmup} --warmup-8bit --patience 100 \
@@ -36,7 +37,7 @@ fi
 
 if [[ "$4" == "ft" ]]; then
     echo Fine-Tune
-    python3 main.py data -a quant${arch} \
+    python3 main.py ${path}/${arch}/model_${strength} -a quant${arch} \
         -d cifar --epochs 500 --step-epoch 50 -b 32 --patience 100 \
         --lr 0.001 --wd 1e-4 \
         --seed 42 --gpu 0 \
@@ -44,8 +45,8 @@ if [[ "$4" == "ft" ]]; then
         --visualization -pr ${project} --tags ${tags} | tee ${path}/${arch}/model_${strength}/log_finetune_${strength}.txt
 else
     echo From-Scratch
-    python3 main.py data -a quant${arch} \
-        -d cifar --epochs 500 --step-epoch 10 -b 32 --patience 100 \
+    python3 main.py ${path}/${arch}/model_${strength} -a quant${arch} \
+        -d cifar --epochs 500 --step-epoch 50 -b 32 --patience 100 \
         --lr 0.001 --wd 1e-4 \
         --seed 42 --gpu 0 \
         --ac ${arch}/model_${strength}/arch_model_best.pth.tar | tee ${path}/${arch}/model_${strength}/log_fromscratch_${strength}.txt
