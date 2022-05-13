@@ -892,7 +892,7 @@ def quantres8_w248a8_multiprec(arch_cfg_path, **kwargs):
     if kwargs['fine_tune']:
         # Load all weights
         state_dict = torch.load(arch_cfg_path)['state_dict']
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
     else:
         # Load only alphas weights
         alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
