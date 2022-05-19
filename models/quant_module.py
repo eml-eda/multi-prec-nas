@@ -484,7 +484,8 @@ class QuantPaCTActiv(nn.Module):
         #self.alpha_activ = torch.nn.Parameter(clamp(self.alpha_activ,-100,+100))
         sw = F.one_hot(torch.argmax(self.alpha_activ), num_classes = len(self.bits))
         for i, branch in enumerate(self.mix_activ):
-            outs.append(branch(input) * sw[i])
+            # torch.nan_to_num() necessary to avoid nan in the output when multiplying by zero
+            outs.append(torch.nan_to_num(branch(input)) * sw[i])
         activ = sum(outs)
         return activ
 

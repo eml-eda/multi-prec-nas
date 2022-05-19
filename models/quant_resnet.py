@@ -313,7 +313,7 @@ class TinyMLResNet(nn.Module):
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, padding=1, 
-            first_layer=True, **kwargs)
+            first_layer=False, **kwargs)
         self.bn1 = nn.BatchNorm2d(16, affine=bnaff)
         self.model = Backbone(conv_func, input_size, bnaff, abits=archas[1:-1], wbits=archws[1:-1], **kwargs)
         #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -911,7 +911,7 @@ def quantres8_w248a8_multiprec(arch_cfg_path, **kwargs):
 # MR
 # qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
 def quantres8_w248a248_multiprec(arch_cfg_path, **kwargs):
-    wbits, abits = [2, 4, 8], [8]
+    wbits, abits = [2, 4, 8], [2, 4, 8]
 
     ## This block of code is only necessary to comply with the underlying EdMIPS code ##
     best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)

@@ -758,7 +758,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
     curr_lra = arch_optimizer.param_groups[0]['lr']
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, top1, top5],
+        [batch_time, data_time, losses, complexity_losses, top1, top5],
         prefix="Epoch: [{}/{}]\t"
                "LR: {}\t"
                "LRA: {}\t".format(epoch, args.epochs, curr_lr, curr_lra))
