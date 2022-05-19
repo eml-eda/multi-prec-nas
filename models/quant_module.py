@@ -1,12 +1,15 @@
 from __future__ import print_function
 
 import copy
+from itertools import cycle
 import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+
+from .hw_models import *
 
 gaussian_steps = {1: 1.596, 2: 0.996, 3: 0.586, 4: 0.336}
 hwgq_steps = {1: 0.799, 2: 0.538, 3: 0.3217, 4: 0.185}
@@ -1014,11 +1017,59 @@ class MultiPrecActivConv2d(nn.Module):
             raise ValueError(f"Unknown regularization target: {self.reg_target}")
         
         return complexity
+    
+    def complexity_loss_cycle(self):
+        cout = self.mix_weight.cout
+        abits = self.mix_activ.bits
+        wbits = self.mix_weight.bits
+        if not self.fix_qtz:
+            s_a = F.softmax(self.mix_activ.alpha_activ/self.temp, dim=0)
+        else:
+            s_a = torch.zeros(len(abits), dtype=torch.float).to(self.mix_activ.alpha_activ.device)
+            s_a[-1] = 1.
+        s_w = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
+
+        complexity = 0
+        for i_a in range(len(abits)):
+            complexity_w = 0
+            for i_w in range(len(wbits)):
+                complexity_w += sum(s_w[i_w]) / mpic_lut(abits[i_a], wbits[i_w])
+            complexity += s_a[i_a] * complexity_w
+        
+        return self.size_product.item() * complexity / cout
+
+        #if not self.fix_qtz:
+        #    # TODO: remove all condition on `first_layer` cause it is always False
+        #    sw = F.softmax(self.mix_activ.alpha_activ, dim=0)
+        #    mix_abit = 0
+        #    for i in range(len(abits)):
+        #        mix_abit += sw[i] * abits[i]
+        #else:
+        #    mix_abit = 8
+        #if not self.fc or self.fc == 'multi':
+        #    sw = F.softmax(self.mix_weight.alpha_weight, dim=0)
+        #    mix_wbit = 0
+        #    wbits = self.mix_weight.bits
+        #    cout = self.mix_weight.cout
+        #    for i in range(len(wbits)):
+        #        mix_wbit += sum(sw[i]) * wbits[i]
+        #    mix_wbit = mix_wbit / cout
+        #else:
+        #    if self.fc == 'fixed':
+        #        mix_wbit = 8
+        #    elif self.fc == 'mixed':
+        #        sw1 = F.softmax(self.mix_weight.alpha_weight, dim=0)
+        #        mix_wbit = 0
+        #        wbits = self.mix_weight.bits
+        #        for i in range(len(wbits)):
+        #            mix_wbit += sw1[i] * wbits[i]
+        
+        #return complexity
 
     def fetch_best_arch(self, layer_idx):
         size_product = float(self.size_product.cpu().numpy())
         memory_size = float(self.memory_size.cpu().numpy())
-        if not self.first_layer:
+        if not self.fix_qtz:
             prob_activ = F.softmax(self.mix_activ.alpha_activ/self.temp, dim=0)
             prob_activ = prob_activ.detach().cpu().numpy()
             best_activ = prob_activ.argmax()
@@ -1028,6 +1079,7 @@ class MultiPrecActivConv2d(nn.Module):
                 mix_abit += prob_activ[i] * abits[i]
         else:
             prob_activ = 1
+            best_activ = -1
             mix_abit = 8
         if not self.fc or self.fc == 'multi':
             prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
@@ -1061,14 +1113,17 @@ class MultiPrecActivConv2d(nn.Module):
                                                mix_abit, mix_wbit, self.param_size, mix_wbit))
         if not self.fc or self.fc == 'multi':
             best_wbit = sum([wbits[_] for _ in best_weight]) / cout
+            mac_cycle = sum([mpic_lut(abits[best_activ], wbits[_]) for _ in best_weight]) / cout
         else:
             if self.fc == 'fixed':
                 best_wbit = 8
                 best_weight = 8
+                mac_cycle = mpic_lut(abits[best_activ], 8)
             elif self.fc == 'mixed':
                 best_wbit = wbits[best_weight]
+                mac_cycle = mpic_lut(abits[best_activ], wbits[best_weight])
 
-        if not self.first_layer:
+        if not self.fix_qtz:
             best_arch = {'best_activ': [best_activ], 'best_weight': [best_weight]}
             bitops = size_product * abits[best_activ] * best_wbit
             bita = memory_size * abits[best_activ]
@@ -1078,11 +1133,13 @@ class MultiPrecActivConv2d(nn.Module):
             bita = memory_size * 8
 
         bitw = self.param_size * best_wbit
+        cycles = size_product / mac_cycle
         mixbitops = size_product * mix_abit * mix_wbit
         mixbita = memory_size * mix_abit
         mixbitw = self.param_size * mix_wbit
 
-        return best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw
+        return best_arch, cycles, bita, bitw, mixbitops, mixbita, mixbitw
+        #return best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw
 
 
 # DJP
@@ -1165,11 +1222,30 @@ class MixActivChanConv2d(nn.Module):
             raise ValueError(f'Unknown regularization target: {self.reg_target}')
         return complexity
 
+    def complexity_loss_cycle(self):
+        abits = self.mix_activ.bits
+        wbits = self.mix_weight.bits
+        if not self.fix_qtz:
+            s_a = F.softmax(self.mix_activ.alpha_activ/self.temp, dim=0)
+        else:
+            s_a = torch.zeros(len(abits), dtype=torch.float).to(self.mix_activ.alpha_activ.device)
+            s_a[-1] = 1.
+        s_w = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
+
+        complexity = 0.
+        for i_a in range(len(abits)):
+            complexity_w = 0.
+            for i_w in range(len(wbits)):
+                complexity_w += s_w[i_w] / mpic_lut(abits[i_a], wbits[i_w])
+            complexity += s_a[i_a] * complexity_w
+        
+        return self.size_product.item() * complexity
+
     def fetch_best_arch(self, layer_idx):
         size_product = float(self.size_product.cpu().numpy())
         memory_size = float(self.memory_size.cpu().numpy())
-        if not self.first_layer:
-            prob_activ = F.softmax(self.mix_activ.alpha_activ, dim=0)
+        if not self.fix_qtz:
+            prob_activ = F.softmax(self.mix_activ.alpha_activ/self.temp, dim=0)
             prob_activ = prob_activ.detach().cpu().numpy()
             best_activ = prob_activ.argmax()
             mix_abit = 0
@@ -1179,7 +1255,7 @@ class MixActivChanConv2d(nn.Module):
         else:
             prob_activ = 1
             mix_abit = 8
-        prob_weight = F.softmax(self.mix_weight.alpha_weight, dim=0)
+        prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
         prob_weight = prob_weight.detach().cpu().numpy()
         best_weight = prob_weight.argmax()
         mix_wbit = 0
@@ -1196,19 +1272,23 @@ class MixActivChanConv2d(nn.Module):
         print('idx {} with shape {}, weight alpha: {}, comp: {:.3f}M * {:.3f} * {:.3f}, '
               'param: {:.3f}M * {:.3f}'.format(layer_idx, weight_shape, prob_weight, size_product,
                                                mix_abit, mix_wbit, self.param_size, mix_wbit))
-        if not self.first_layer:
+        if not self.fix_qtz:
             best_arch = {'best_activ': [best_activ], 'best_weight': [best_weight]}
             bitops = size_product * abits[best_activ] * wbits[best_weight]
             bita = memory_size * abits[best_activ]
+            mac_cycle = mpic_lut(abits[best_activ], wbits[best_weight])
         else:
             best_arch = {'best_activ': [8], 'best_weight': [best_weight]}
             bitops = size_product * 8 * wbits[best_weight]
             bita = memory_size * 8
+            mac_cycle = mpic_lut(8, wbits[best_weight])
         bitw = self.param_size * wbits[best_weight]
+        cycles = size_product / mac_cycle
         mixbitops = size_product * mix_abit * mix_wbit
         mixbita = memory_size * mix_abit
         mixbitw = self.param_size * mix_wbit
-        return best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw
+        #return best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw
+        return best_arch, cycles, bita, bitw, mixbitops, mixbita, mixbitw
 
 class MixActivConv2d(nn.Module):
 

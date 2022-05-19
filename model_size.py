@@ -38,11 +38,11 @@ with torch.no_grad():
     model(rnd_input)
 
 try:
-    bitops, bita, bitw, peak_mem_layer, peak_mem_bitw = model.fetch_arch_info()
+    cycles, bita, bitw, peak_mem_layer, peak_mem_bitw = model.fetch_arch_info()
 except:
-    bitops, bita, bitw = model.fetch_arch_info()
+    cycles, bita, bitw = model.fetch_arch_info()
 
-print(f'bitops: {bitops}')
+print(f'cycles: {cycles}')
 print(f'bita: {bita}')
 print(f'bitw: {bitw}')
 print(f'peak_mem_bitw: {peak_mem_bitw} @ {peak_mem_layer}')

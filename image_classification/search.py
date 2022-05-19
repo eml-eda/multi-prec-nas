@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import math
 import pathlib
@@ -14,6 +15,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -430,7 +432,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     param.requires_grad = True
     elif args.warmup_8bit:
         pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
-        state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        state_dict_8bit = preprocess_dict(torch.load(pretrained_checkpoint)['state_dict'])
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
@@ -621,11 +623,11 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
 
         print('========= architecture =========')
         if hasattr(model, 'module'):
-            best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw = model.module.fetch_best_arch()
+            best_arch, cycles, bita, bitw, mixbitops, mixbita, mixbitw = model.module.fetch_best_arch()
         else:
-            best_arch, bitops, bita, bitw, mixbitops, mixbita, mixbitw = model.fetch_best_arch()
-        print('best model with bitops: {:.3f}M, bita: {:.3f}K, bitw: {:.3f}M'.format(
-            bitops, bita, bitw))
+            best_arch, cycles, bita, bitw, mixbitops, mixbita, mixbitw = model.fetch_best_arch()
+        print('best model with cycles: {:.3f}M, bita: {:.3f}K, bitw: {:.3f}M'.format(
+            cycles, bita, bitw))
         print('expected model with bitops: {:.3f}M, bita: {:.3f}K, bitw: {:.3f}M'.format(
             mixbitops, mixbita, mixbitw))
         for key, value in best_arch.items():
@@ -668,7 +670,7 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
         if args.visualization and scope == 'Search':
             wandb.log({
                 scope + '/Epoch': epoch,
-                'bitops-best': bitops,
+                'bitops-best': cycles,
                 'bita-best': bita,
                 'bitw-best': bitw
             })
@@ -784,11 +786,11 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         top5.update(acc5[0], images.size(0))
         # complexity penalty
         if args.complexity_decay != 0 and scope == 'Search':
-            #if hasattr(model, 'module'):
-            #    loss_complexity = args.complexity_decay * model.module.complexity_loss()
-            #else:
-            #    loss_complexity = args.complexity_decay * model.complexity_loss()
-            loss_complexity = args.complexity_decay * loss_complexity
+            if hasattr(model, 'module'):
+                loss_complexity = args.complexity_decay * model.module.complexity_loss()
+            else:
+                loss_complexity = args.complexity_decay * model.complexity_loss()
+            #loss_complexity = args.complexity_decay * loss_complexity
             loss += loss_complexity
         else:
             loss_complexity = 0
@@ -1021,6 +1023,14 @@ def sample_arch(state_dict):
             alpha = params.cpu().numpy()
             arch[full_name] = alpha.argmax(axis=0)
     return arch
+
+def preprocess_dict(state_dict):
+    new_dict = copy.deepcopy(state_dict)
+    for key in state_dict.keys():
+        name = key.split('.')[-1]
+        if name == 'alpha_activ':
+            new_dict.pop(key)
+    return new_dict
 
 
 if __name__ == '__main__':

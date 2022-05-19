@@ -8,8 +8,10 @@ path="."
 #arch="res8_w8a8"
 #arch="res8_w4a8"
 #arch="res8_w2a8"
-arch="res8_w248a8_chan"
+#arch="res8_w248a8_chan"
 #arch="res8_w248a8_multiprec"
+#arch="res8_w248a248_multiprec"
+arch=$3
 
 project="multi-precision-nas_ic"
 
@@ -23,7 +25,7 @@ mkdir -p ${path}/${arch}/model_${strength}
 
 export WANDB_MODE=offline
 
-if [[ "$3" == "search" ]]; then
+if [[ "$4" == "search" ]]; then
     echo Search
     split=0.2
     python3 search.py ${path}/${arch}/model_${strength} -a mix${arch} \
@@ -37,7 +39,7 @@ if [[ "$3" == "search" ]]; then
         --visualization -pr ${project} --tags ${tags} | tee ${path}/${arch}/model_${strength}/log_search_${strength}.txt
 fi
 
-if [[ "$4" == "ft" ]]; then
+if [[ "$5" == "ft" ]]; then
     echo Fine-Tune
     python3 main.py ${path}/${arch}/model_${strength} -a quant${arch} \
         -d cifar --epochs 500 --step-epoch 50 -b 32 --patience 100 \

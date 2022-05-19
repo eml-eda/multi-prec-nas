@@ -13,6 +13,7 @@ __all__ = [
     'mixres18_w248a8_multiprec', 'mixres18_w248a4_multiprec', 'mixres18_w248a2_multiprec',
     'mixres18_w48a8_multiprec', 'mixres18_w08a8_multiprec', 'mixres18_w024a8_multiprec',
     'mixres8_w248a8_chan', 'mixres8_w0248a8_multiprec', 'mixres8_w248a8_multiprec',
+    'mixres8_w248a248_chan', 'mixres8_w248a248_multiprec',
 ]
 
 
@@ -397,14 +398,14 @@ class TinyMLResNet(nn.Module):
             return x, w_complexity
 
     def complexity_loss(self):
-        size_product = []
+        #size_product = []
         loss = 0
         for m in self.modules():
             if isinstance(m, self.conv_func):
-                loss += m.complexity_loss()
-                size_product += [m.size_product]
-        normalizer = size_product[0].item()
-        loss /= normalizer
+                loss += m.complexity_loss_cycle()
+                #size_product += [m.size_product]
+        #normalizer = size_product[0].item()
+        #loss /= normalizer
         return loss
 
     def fetch_best_arch(self):
@@ -499,8 +500,18 @@ def mixres8_w248a8_multiprec(**kwargs):
                 share_weight=True, **kwargs)
 
 # MR
+def mixres8_w248a248_multiprec(**kwargs):
+    return TinyMLResNet(BasicBlock, qm.MultiPrecActivConv2d, search_fc='multi', wbits=[2, 4, 8], abits=[2, 4, 8],
+                share_weight=True, **kwargs)
+
+# MR
 def mixres8_w248a8_chan(**kwargs):
     return TinyMLResNet(BasicBlock, qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[8],
+                  share_weight=True, **kwargs)
+
+# MR
+def mixres8_w248a248_chan(**kwargs):
+    return TinyMLResNet(BasicBlock, qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[2, 4, 8],
                   share_weight=True, **kwargs)
 
 # MR

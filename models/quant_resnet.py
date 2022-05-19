@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import math
 from . import quant_module as qm
+from .hw_models import *
 
 # MR
 __all__ = [
@@ -19,7 +20,10 @@ __all__ = [
     'quantres18_w48a8_multiprec', 'quantres18_w08a8_multiprec', 'quantres18_w024a8_multiprec',
     'quantres18_fp', 
     'quantres8_fp', 'quantres8_w2a8', 'quantres8_w4a8', 'quantres8_w8a8', 'quantres8_w32a8', 
+    'quantres8_w2a4', 'quantres8_w4a4', 'quantres8_w8a4',
+    'quantres8_w2a2', 'quantres8_w4a2', 'quantres8_w8a2',
     'quantres8_w0248a8_multiprec', 'quantres8_w248a8_chan', 'quantres8_w248a8_multiprec',
+    'quantres8_w248a248_chan', 'quantres8_w248a248_multiprec',
 ]
 
 
@@ -308,7 +312,8 @@ class TinyMLResNet(nn.Module):
         kwargs['groups'] = 1
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-        self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, padding=1, **kwargs)
+        self.conv1 = conv_func(3, 16, abits=archas[0], wbits=archws[0], kernel_size=3, stride=1, bias=False, padding=1, 
+            first_layer=True, **kwargs)
         self.bn1 = nn.BatchNorm2d(16, affine=bnaff)
         self.model = Backbone(conv_func, input_size, bnaff, abits=archas[1:-1], wbits=archws[1:-1], **kwargs)
         #self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -393,12 +398,14 @@ class TinyMLResNet(nn.Module):
 
     def fetch_arch_info(self):
         sum_bitops, sum_bita, sum_bitw = 0, 0, 0
+        sum_cycles = 0 
         layer_idx = 0
         for m in self.modules():
             if isinstance(m, self.conv_func):
                 size_product = m.size_product.item()
                 memory_size = m.memory_size.item()
                 bitops = size_product * m.abits * m.wbit
+                cycles = size_product / mpic_lut(m.abits, m.wbit)
                 bita = m.memory_size.item() * m.abits
                 bitw = m.param_size * m.wbit
                 #weight_shape = list(m.conv.weight.shape)
@@ -406,10 +413,12 @@ class TinyMLResNet(nn.Module):
                 #      'param: {:.3f}M * {}'.format(layer_idx, weight_shape, size_product, m.abit,
                 #                                   m.wbit, memory_size, m.abit, m.param_size, m.wbit))
                 sum_bitops += bitops
+                sum_cycles += cycles
                 sum_bita += bita
                 sum_bitw += bitw
                 layer_idx += 1
-        return sum_bitops, sum_bita, sum_bitw
+        return sum_cycles, sum_bita, sum_bitw
+        #return sum_bitops, sum_bita, sum_bitw
 
 def _load_arch(arch_path, names_nbits):
     checkpoint = torch.load(arch_path)
@@ -901,8 +910,69 @@ def quantres8_w248a8_multiprec(arch_cfg_path, **kwargs):
 
 # MR
 # qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
+def quantres8_w248a248_multiprec(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [8]
+
+    ## This block of code is only necessary to comply with the underlying EdMIPS code ##
+    best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w_ch in best_arch['alpha_weight']]
+    if len(archws) == 9:
+        # Case of fixed-precision on last fc layer
+        archws.append(8)
+    assert len(archas) == 10 # 10 insead of 8 because conv1 and fc activations are also quantized
+    assert len(archws) == 10 # 10 instead of 8 because conv1 and fc weights are also quantized 
+    ##
+
+    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        state_dict = torch.load(arch_cfg_path)['state_dict']
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        # Load only alphas weights
+        alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
+        model.load_state_dict(alpha_state_dict, strict = False)
+    return model
+
+# MR
+# qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
 def quantres8_w248a8_chan(arch_cfg_path, **kwargs):
     wbits, abits = [2, 4, 8], [8]
+
+    ## This block of code is only necessary to comply with the underlying EdMIPS code ##
+    #best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
+    #archas = [abits for a in best_arch['alpha_activ']]
+    #archws = [wbits for w_ch in best_arch['alpha_weight']]
+    #if len(archws) == 9:
+    #    # Case of fixed-precision on last fc layer
+    #    archws.append(8)
+    #assert len(archas) == 10 # 10 insead of 8 because conv1 and fc activations are also quantized
+    #assert len(archws) == 10 # 10 instead of 8 because conv1 and fc weights are also quantized 
+    ##
+    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
+    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w in best_arch['alpha_weight']]
+
+    model = TinyMLResNet(BasicBlock, qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        checkpoint = torch.load(arch_cfg_path)
+        weight_state_dict = _remove_alpha(checkpoint['state_dict'])
+        model.load_state_dict(weight_state_dict, strict=False)
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    else:
+        # Load only alphas weights
+        alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
+        model.load_state_dict(alpha_state_dict, strict = False)
+    return model
+
+# MR
+# qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
+def quantres8_w248a248_chan(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [2, 4, 8]
 
     ## This block of code is only necessary to comply with the underlying EdMIPS code ##
     #best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
@@ -1078,6 +1148,54 @@ def quantres8_w4a8(arch_cfg_path, **kwargs):
 def quantres8_w8a8(arch_cfg_path, **kwargs):
     # This precisions can be whatever
     archas, archws = [8] * 10, [8] * 10
+    assert len(archas) == 10
+    assert len(archws) == 10
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantres8_w2a4(arch_cfg_path, **kwargs):
+    # This precisions can be whatever
+    archas, archws = [4] * 10, [2] * 10
+    assert len(archas) == 10
+    assert len(archws) == 10
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantres8_w4a4(arch_cfg_path, **kwargs):
+    # This precisions can be whatever
+    archas, archws = [4] * 10, [4] * 10
+    assert len(archas) == 10
+    assert len(archws) == 10
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantres8_w8a4(arch_cfg_path, **kwargs):
+    # This precisions can be whatever
+    archas, archws = [4] * 10, [8] * 10
+    assert len(archas) == 10
+    assert len(archws) == 10
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantres8_w2a2(arch_cfg_path, **kwargs):
+    # This precisions can be whatever
+    archas, archws = [2] * 10, [2] * 10
+    assert len(archas) == 10
+    assert len(archws) == 10
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantres8_w4a2(arch_cfg_path, **kwargs):
+    # This precisions can be whatever
+    archas, archws = [2] * 10, [4] * 10
+    assert len(archas) == 10
+    assert len(archws) == 10
+    return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantres8_w8a2(arch_cfg_path, **kwargs):
+    # This precisions can be whatever
+    archas, archws = [2] * 10, [8] * 10
     assert len(archas) == 10
     assert len(archws) == 10
     return TinyMLResNet(BasicBlock, qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
