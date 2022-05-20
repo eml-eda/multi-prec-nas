@@ -1167,6 +1167,8 @@ class MixActivChanConv2d(nn.Module):
         self.fc = fc
         self.gumbel = kwargs.pop('gumbel', False)
 
+        self.temp = 1
+
         # build mix-precision branches
         self.mix_activ = MixQuantPaCTActiv(self.abits)
         self.share_weight = share_weight
@@ -1186,6 +1188,7 @@ class MixActivChanConv2d(nn.Module):
         self.register_buffer('memory_size', torch.tensor(0, dtype=torch.float))
 
     def forward(self, input, temp, is_hard):
+        self.temp = temp
         in_shape = input.shape
         tmp = torch.tensor(in_shape[1] * in_shape[2] * in_shape[3] * 1e-3, dtype=torch.float)
         self.memory_size.copy_(tmp)
