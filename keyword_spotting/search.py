@@ -1,5 +1,6 @@
 import os
 import argparse
+import copy
 import math
 import pathlib
 import random
@@ -72,6 +73,8 @@ parser.add_argument('-d', '--dataset', default='GoogleSpeechCommands', type=str,
                     help='GoogleSpeechCommands')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=60, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=30, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -551,7 +554,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     param.requires_grad = True
     elif args.warmup_8bit:
         pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
-        state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        state_dict_8bit = preprocess_dict(torch.load(pretrained_checkpoint)['state_dict'])
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
@@ -637,6 +640,7 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
     best_epoch_test = args.start_epoch
     best_acc1 = 0
     best_acc1_test = 0
+    epoch_wout_improve = 0
     temp = args.temperature
 
     # Plot gradients
@@ -699,8 +703,14 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
         is_best = acc1 > best_acc1
         if is_best:
             best_epoch = epoch
-            best_acc1 = max(acc1, best_acc1)
-            best_acc1_test = max(acc1_test, best_acc1_test)
+            best_acc1 = acc1
+            best_acc1_test = acc1_test
+            epoch_wout_improve = 0
+            print(f'New best Acc_val: {best_acc1}')
+            print(f'New best Acc_test: {best_acc1_test}')
+        else:
+            epoch_wout_improve += 1
+            print(f'Epoch without improvement: {epoch_wout_improve}')
 
         # Anneal temperature 
         if args.anneal_temp and scope == 'Search':
@@ -793,6 +803,11 @@ def train(train_loader, val_loader, test_loader, model, criterion, optimizer, ar
                     data = table_w, 
                     columns = ['precision', 'fraction'])
             wandb.log({'table_w': wandb_table_w})
+        
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
 
     return best_epoch, best_acc1, best_acc1_test
 
@@ -806,7 +821,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
     curr_lr = optimizer.param_groups[0]['lr']
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, top1],
+        [batch_time, data_time, losses, complexity_losses, top1],
         prefix="Epoch: [{}/{}]\t"
                "LR: {}\t".format(epoch, args.epochs, curr_lr))
 
@@ -836,11 +851,11 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
 
         # complexity penalty
         if args.complexity_decay != 0 and scope == 'Search':
-            #if hasattr(model, 'module'):
-            #    loss_complexity = args.complexity_decay * model.module.complexity_loss()
-            #else:
-            #    loss_complexity = args.complexity_decay * model.complexity_loss()
-            loss_complexity = args.complexity_decay * loss_complexity
+            if hasattr(model, 'module'):
+                loss_complexity = args.complexity_decay * model.module.complexity_loss()
+            else:
+                loss_complexity = args.complexity_decay * model.complexity_loss()
+            #loss_complexity = args.complexity_decay * loss_complexity
             loss += loss_complexity
         else:
             loss_complexity = 0
@@ -1074,6 +1089,14 @@ def sample_arch(state_dict):
             alpha = params.cpu().numpy()
             arch[full_name] = alpha.argmax(axis=0)
     return arch
+
+def preprocess_dict(state_dict):
+    new_dict = copy.deepcopy(state_dict)
+    for key in state_dict.keys():
+        name = key.split('.')[-1]
+        if name == 'alpha_activ':
+            new_dict.pop(key)
+    return new_dict
 
 if __name__ == '__main__':
     main()

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-strenght=( 5.0e+1 7.5e+0 2.5e+0 )
+source run_kws.sh 1e-84 0 dscnn_w8a4 nsearch nft
+source run_kws.sh 1e-44 0 dscnn_w4a4 nsearch nft
+source run_kws.sh 1e-24 0 dscnn_w2a4 nsearch nft
 
-for s in "${strenght[@]}"
-do
-    echo "Strength: ${s}"
-    source run_kws_local.sh ${s} 0 search ft
-done
+source run_kws.sh 1e-82 0 dscnn_w8a2 nsearch nft
+source run_kws.sh 1e-42 0 dscnn_w4a2 nsearch nft
+source run_kws.sh 1e-22 0 dscnn_w2a2 nsearch nft

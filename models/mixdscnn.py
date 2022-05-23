@@ -8,7 +8,9 @@ from . import quant_module as qm
 __all__ = [
     'mixdscnn_w0248a8_multiprec', 
     'mixdscnn_w248a8_multiprec', 
+    'mixdscnn_w248a248_multiprec', 
     'mixdscnn_w248a8_chan',
+    'mixdscnn_w248a248_chan',
 ]
 
 # MR
@@ -161,9 +163,9 @@ class DS_CNN(nn.Module):
         for m in self.modules():
             if isinstance(m, self.conv_func):
                 loss += m.complexity_loss()
-                size_product += [m.size_product]
-        normalizer = size_product[0].item()
-        loss /= normalizer
+                #size_product += [m.size_product]
+        #normalizer = size_product[0].item()
+        #loss /= normalizer
         return loss
 
     def fetch_best_arch(self):
@@ -202,6 +204,16 @@ def mixdscnn_w248a8_multiprec(**kwargs):
                   share_weight=True, **kwargs)
 
 # MR
+def mixdscnn_w248a248_multiprec(**kwargs):
+    return DS_CNN(qm.MultiPrecActivConv2d, search_fc='multi', wbits=[2, 4, 8], abits=[2, 4, 8],
+                  share_weight=True, **kwargs)
+
+# MR
 def mixdscnn_w248a8_chan(**kwargs):
     return DS_CNN(qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[8],
+                  share_weight=True, **kwargs)
+
+# MR
+def mixdscnn_w248a248_chan(**kwargs):
+    return DS_CNN(qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[2, 4, 8],
                   share_weight=True, **kwargs)

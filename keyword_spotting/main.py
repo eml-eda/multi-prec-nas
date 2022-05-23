@@ -68,6 +68,8 @@ parser.add_argument('-d', '--dataset', default='GoogleSpeechCommands', type=str,
                     help='GoogleSpeechCommands')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=60, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=30, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -472,6 +474,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     best_epoch = args.start_epoch
     best_epoch_test = args.start_epoch
+    epoch_wout_improve = 0
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -494,8 +498,15 @@ def main_worker(gpu, ngpus_per_node, args):
         is_best = acc1 > best_acc1
         if is_best:
             best_epoch = epoch
-            best_acc1 = max(acc1, best_acc1)
-            best_acc1_test = max(acc1_test, best_acc1_test)
+            best_acc1 = acc1
+            best_acc1_test = acc1_test
+            epoch_wout_improve = 0
+            print(f'New best Acc_val: {best_acc1}')
+            print(f'New best Acc_test: {best_acc1_test}')
+        else:
+            epoch_wout_improve += 1
+            print(f'Epoch without improvement: {epoch_wout_improve}')
+
 
         #print('========= architecture info =========')
         #if hasattr(model, 'module'):
@@ -513,6 +524,11 @@ def main_worker(gpu, ngpus_per_node, args):
                 'best_acc1': best_acc1,
                 'optimizer': optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch)
+
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
 
     best_acc1_val = best_acc1 
     print('Best Acc_val@1 {0} @ epoch {1}'.format(best_acc1_val, best_epoch))

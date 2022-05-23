@@ -1081,6 +1081,7 @@ class MultiPrecActivConv2d(nn.Module):
         else:
             prob_activ = 1
             best_activ = -1
+            abits = self.mix_activ.bits
             mix_abit = 8
         if not self.fc or self.fc == 'multi':
             prob_weight = F.softmax(self.mix_weight.alpha_weight/self.temp, dim=0)
