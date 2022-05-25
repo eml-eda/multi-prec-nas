@@ -165,7 +165,10 @@ class DS_CNN(nn.Module):
                 #        peak_layer = layer_name
                 else:
                     bitops = size_product * m.abits * m.wbit
-                    cycles = size_product / mpic_lut(m.abits, m.wbit)
+                    if not m.first_layer:
+                        cycles = size_product / mpic_lut(m.abits, m.wbit)
+                    else:
+                        cycles = size_product / mpic_lut(8, m.wbit)
                     bita = m.memory_size.item() * m.abits
                     bitw = m.param_size * m.wbit
                     #weight_shape = list(m.conv.weight.shape)

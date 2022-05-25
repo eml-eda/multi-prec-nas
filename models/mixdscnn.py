@@ -162,7 +162,7 @@ class DS_CNN(nn.Module):
         loss = 0
         for m in self.modules():
             if isinstance(m, self.conv_func):
-                loss += m.complexity_loss()
+                loss += m.complexity_loss_cycle()
                 #size_product += [m.size_product]
         #normalizer = size_product[0].item()
         #loss /= normalizer
