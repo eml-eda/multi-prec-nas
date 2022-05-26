@@ -46,6 +46,8 @@ parser.add_argument('-d', '--dataset', default='coco2014_96_tf', type=str,
                     help='coco2014_96 or coco2014_96_tf')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=20, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=30, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -162,6 +164,7 @@ def main():
 
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
+    global best_acc1_test
     args.gpu = gpu
 
     if args.gpu is not None:
@@ -230,7 +233,7 @@ def main_worker(gpu, ngpus_per_node, args):
             subset = 'training',
             color_mode = 'rgb'
             )
-        val_generator = datagen.flow_from_directory(
+        test_generator = datagen.flow_from_directory(
             data_dir,
             target_size = (96, 96),
             batch_size = args.batch_size,
@@ -242,16 +245,27 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         else:
             train_sampler = None
-
+        
         train_set = VWWDataWrapper(data_generator=train_generator)
-        val_set = VWWDataWrapper(data_generator=val_generator)
+        # Split dataset into train and validation
+        train_len = int(len(train_set) * 0.8)
+        val_len = len(train_set) - train_len
+        # Fix generator seed for reproducibility
+        data_gen = torch.Generator().manual_seed(args.seed)
+        train_dataset, val_dataset = torch.utils.data.random_split(train_set, [train_len, val_len], generator=data_gen)
 
         train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=None, shuffle=(train_sampler is None),
+            train_dataset, batch_size=None, shuffle=(train_sampler is None),
             num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-        val_loader = torch.utils.data.DataLoader(
-            val_set, batch_size=None, shuffle=False,
+        val_loader = torch.utils.data.DataLoader(val_dataset,
+            batch_size=None, shuffle=True,
+            num_workers=args.workers, pin_memory=True)
+
+        test_set = VWWDataWrapper(data_generator=test_generator)
+
+        test_loader = torch.utils.data.DataLoader(
+            test_set, batch_size=None, shuffle=False,
             num_workers=args.workers, pin_memory=True)
     else:
         raise ValueError('Unknown dataset: {}. Please use "coco2014_96 instead"'.format(args.dataset)) 
@@ -374,6 +388,8 @@ def main_worker(gpu, ngpus_per_node, args):
         return
 
     best_epoch = args.start_epoch
+    epoch_wout_improve = 0
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -389,12 +405,20 @@ def main_worker(gpu, ngpus_per_node, args):
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, epoch, args)
+        acc1_test = validate(test_loader, model, criterion, epoch, args)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
         if is_best:
             best_epoch = epoch
+            best_acc1 = acc1
+            best_acc1_test = acc1_test
+            epoch_wout_improve = 0
+            print(f'New best Acc_val: {best_acc1}')
+            print(f'New best Acc_test: {best_acc1_test}')
+        else:
+            epoch_wout_improve += 1
+            print(f'Epoch without improvement: {epoch_wout_improve}')
 
         #print('========= architecture info =========')
         #if hasattr(model, 'module'):
@@ -413,7 +437,16 @@ def main_worker(gpu, ngpus_per_node, args):
                 'optimizer': optimizer.state_dict(),
             }, is_best, epoch, args.step_epoch)
 
-    print('Best Acc@1 {0} @ epoch {1}'.format(best_acc1, best_epoch))
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
+    
+    best_acc1_val = best_acc1 
+    print('Best Acc_val@1 {0} @ epoch {1}'.format(best_acc1_val, best_epoch))
+
+    test_acc1 = best_acc1_test
+    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch))
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args):
