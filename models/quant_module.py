@@ -410,6 +410,7 @@ class QuantMultiPrecActivConv2d(nn.Module):
         self.fine_tune = kwargs.pop('fine_tune', False)
         self.first_layer = kwargs.pop('first_layer', False)
         self.fc = fc
+        self.fc_act_fix = kwargs.pop('fc_act_fix', False)
 
         self.abits = abits
         self.wbits = wbits
@@ -419,7 +420,11 @@ class QuantMultiPrecActivConv2d(nn.Module):
             self.fc = fc
         else:
             self.fc = False
-        self.mix_activ = QuantPaCTActiv(abits)
+        if not self.fc_act_fix:
+            self.mix_activ = QuantPaCTActiv(abits)
+        else:
+            self.mix_activ = QuantPaCTActiv(8)
+
         if not fc:
             self.mix_weight = QuantMultiPrecConv2d(inplane, outplane, wbits, **kwargs)
         else:
@@ -536,8 +541,13 @@ class QuantMixActivChanConv2d(nn.Module):
         self.fc = False
 
         self.first_layer = kwargs.pop('first_layer', False)
+        self.fc_act_fix = kwargs.pop('fc_act_fix', False)
 
-        self.mix_activ = QuantPaCTActiv(abits)
+        if not self.fc_act_fix:
+            self.mix_activ = QuantPaCTActiv(abits)
+        else:
+            self.mix_activ = QuantPaCTActiv(8)
+        
         if not self.fc:
             self.mix_weight = QuantMixChanConv2d(inplane, outplane, bits=wbits, **kwargs)
         else:

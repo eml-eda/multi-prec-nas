@@ -34,7 +34,7 @@ if [[ "$4" == "search" ]]; then
     echo Search
     split=0.2
     python3 search.py ${path}/${arch}/model_${strength} -a mix${arch} \
-        -d coco2014_96_tf --arch-data-split ${split} \
+        -d coco2014_96_tf --arch-data-split ${split} --patience 70 \
         --epochs 70 --step-epoch 10 -b 32 --warmup ${warmup} --warmup-8bit \
         --lr 0.001 --lra 0.01 --wd 1e-4 \
         --ai same --cd ${strength} --rt weights \

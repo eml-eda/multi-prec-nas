@@ -105,7 +105,7 @@ class Backbone(nn.Module):
 
 class TinyMLMobilenetV1(nn.Module):
 
-    def __init__(self, conv_func, archws, archas, qtz_fc=None, num_classes=2, input_size=96, width_mult=.25,
+    def __init__(self, conv_func, archws, archas, qtz_fc=None, fc_act_fix=False, num_classes=2, input_size=96, width_mult=.25,
                  bnaff=True, **kwargs):
         print('archas: {}'.format(archas))
         print('archws: {}'.format(archws))
@@ -115,6 +115,7 @@ class TinyMLMobilenetV1(nn.Module):
             self.qtz_fc = qtz_fc
         else:
             self.qtz_fc = False
+        self.fc_act_fix = fc_act_fix
         super().__init__()
         self.gumbel = kwargs.get('gumbel', False)
         #self.model = nn.Sequential(
@@ -153,7 +154,8 @@ class TinyMLMobilenetV1(nn.Module):
         self.model = Backbone(conv_func, input_size, bnaff, width_mult, archws, archas, **kwargs)
         if self.qtz_fc:
             self.fc = conv_func(make_divisible(1024*width_mult), num_classes, abits=archas[-1], wbits=archws[-1], 
-                        kernel_size=1, stride=1, padding=0, bias=False, groups=1, fc=self.qtz_fc, **kwargs)
+                        kernel_size=1, stride=1, padding=0, bias=True, groups=1, 
+                        fc=self.qtz_fc, fc_act_fix=self.fc_act_fix, **kwargs)
         else:
             self.fc = nn.Linear(make_divisible(1024*width_mult), num_classes)
 

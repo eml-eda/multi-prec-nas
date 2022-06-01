@@ -1,4 +1,5 @@
 import argparse
+import copy
 import math
 import os
 import pathlib
@@ -53,6 +54,8 @@ parser.add_argument('-d', '--dataset', default='coco2014_96_tf', type=str,
                     help='coco2014_96_tf')
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
+parser.add_argument('--patience', default=20, type=int, metavar='N',
+                    help='number of epochs wout improvements to wait before early stopping')
 parser.add_argument('--step-epoch', default=10, type=int, metavar='N',
                     help='number of epochs to decay learning rate')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -260,7 +263,7 @@ def main_worker(gpu, ngpus_per_node, args):
             subset = 'training',
             color_mode = 'rgb'
             )
-        val_generator = datagen.flow_from_directory(
+        test_generator = datagen.flow_from_directory(
             data_dir,
             target_size = (96, 96),
             batch_size = args.batch_size,
@@ -274,14 +277,25 @@ def main_worker(gpu, ngpus_per_node, args):
             train_sampler = None
 
         train_set = VWWDataWrapper(data_generator=train_generator)
-        val_set = VWWDataWrapper(data_generator=val_generator)
+        # Split dataset into train and validation
+        train_len = int(len(train_set) * 0.8)
+        val_len = len(train_set) - train_len
+        # Fix generator seed for reproducibility
+        data_gen = torch.Generator().manual_seed(args.seed)
+        train_dataset, val_dataset = torch.utils.data.random_split(train_set, [train_len, val_len], generator=data_gen)
 
         train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=None, shuffle=(train_sampler is None),
+            train_dataset, batch_size=None, shuffle=(train_sampler is None),
             num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-        val_loader = torch.utils.data.DataLoader(
-            val_set, batch_size=None, shuffle=False,
+        val_loader = torch.utils.data.DataLoader(val_dataset,
+            batch_size=None, shuffle=True,
+            num_workers=args.workers, pin_memory=True)
+
+        test_set = VWWDataWrapper(data_generator=test_generator)
+
+        test_loader = torch.utils.data.DataLoader(
+            test_set, batch_size=None, shuffle=False,
             num_workers=args.workers, pin_memory=True)
     else:
         raise ValueError('Unknown dataset: {}. Please use "coco2014_96" instead'.format(args.dataset))
@@ -411,8 +425,8 @@ def main_worker(gpu, ngpus_per_node, args):
                 if 'alpha' in name:
                     param.requires_grad = True
     elif args.warmup_8bit:
-        pretrained_checkpoint = args.data.parent / ('warmup_8bit.pth.tar')
-        state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
+        state_dict_8bit = preprocess_dict(torch.load(pretrained_checkpoint)['state_dict'])
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
@@ -529,7 +543,7 @@ def main_worker(gpu, ngpus_per_node, args):
     #        wandb.log({'table_w': wandb_table_w})
 
     # Search
-    best_epoch, best_acc1 = train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Search')
+    best_epoch, best_acc1, best_acc1_test = train(train_loader, val_loader, test_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Search')
 
     # Visualization: bar-plot with fraction of chosen precisions for each layer
     if args.visualization and (not args.debug):
@@ -549,12 +563,18 @@ def main_worker(gpu, ngpus_per_node, args):
                 columns = ['precision', 'fraction'])
         wandb.log({'table_w': wandb_table_w})
 
-    print('Best Acc@1 {0} @ epoch {1}'.format(best_acc1, best_epoch))
+    best_acc1_val = best_acc1 
+    print('Best Acc_val@1 {0} @ epoch {1}'.format(best_acc1_val, best_epoch))
+
+    test_acc1 = best_acc1_test
+    print('Test Acc_val@1 {0} @ epoch {1}'.format(test_acc1, best_epoch))
 
 
-def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Search'):
+def train(train_loader, val_loader, test_loader, model, criterion, optimizer, arch_optimizer, scheduler, args, scope='Search'):
     best_epoch = args.start_epoch
     best_acc1 = 0
+    best_acc1_test = 0
+    epoch_wout_improve = 0
     temp = args.temperature
 
     # Plot gradients
@@ -611,6 +631,7 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, epoch, args, temp, scope=scope)
+        acc1_test = validate(test_loader, model, criterion, epoch, args, temp, scope=scope)
 
         # Anneal temperature 
         if args.anneal_temp and scope == 'Search':
@@ -618,9 +639,16 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
         if is_best:
             best_epoch = epoch
+            best_acc1 = acc1
+            best_acc1_test = acc1_test
+            epoch_wout_improve = 0
+            print(f'New best Acc_val: {best_acc1}')
+            print(f'New best Acc_test: {best_acc1_test}')
+        else:
+            epoch_wout_improve += 1
+            print(f'Epoch without improvement: {epoch_wout_improve}')
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -708,7 +736,13 @@ def train(train_loader, val_loader, model, criterion, optimizer, arch_optimizer,
                     data = table_w, 
                     columns = ['precision', 'fraction'])
             wandb.log({'table_w': wandb_table_w})
-    return best_epoch, best_acc1
+        
+        # Early-Stop
+        if epoch_wout_improve >= args.patience:
+            print(f'Early stopping at epoch {epoch}')
+            break
+        
+    return best_epoch, best_acc1, best_acc1_test
 
 def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch, args, temp, scope='Search'):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -720,7 +754,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
     curr_lra = arch_optimizer.param_groups[0]['lr']
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, top1],
+        [batch_time, data_time, losses, complexity_losses, top1],
         prefix="Epoch: [{}/{}]\t"
                "LR: {}\t"
                "LRA: {}\t".format(epoch, args.epochs, curr_lr, curr_lra))
@@ -748,10 +782,10 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         top1.update(acc1[0].item(), images.size(0))
         # complexity penalty
         if args.complexity_decay != 0 and scope == 'Search':
-            #if hasattr(model, 'module'):
-            #    loss_complexity = args.complexity_decay * model.module.complexity_loss()
-            #else:
-            #    loss_complexity = args.complexity_decay * model.complexity_loss()
+            if hasattr(model, 'module'):
+                loss_complexity = args.complexity_decay * model.module.complexity_loss()
+            else:
+                loss_complexity = args.complexity_decay * model.complexity_loss()
             loss_complexity = args.complexity_decay * loss_complexity
             loss += loss_complexity
         else:
@@ -989,6 +1023,13 @@ def sample_arch(state_dict):
             arch[full_name] = alpha.argmax(axis=0)
     return arch
 
+def preprocess_dict(state_dict):
+    new_dict = copy.deepcopy(state_dict)
+    for key in state_dict.keys():
+        name = key.split('.')[-1]
+        if name == 'alpha_activ':
+            new_dict.pop(key)
+    return new_dict
 
 if __name__ == '__main__':
     main()
