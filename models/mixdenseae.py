@@ -6,7 +6,9 @@ from . import quant_module as qm
 
 # MR
 __all__ = [
-    'mixdenseae_w0248a8_multiprec', 'mixdenseae_w248a8_multiprec', 'mixdenseae_w248a8_chan'
+    'mixdenseae_w0248a8_multiprec', 
+    'mixdenseae_w248a8_multiprec', 'mixdenseae_w248a8_chan',
+    'mixdenseae_w248a248_multiprec', 'mixdenseae_w248a248_chan',
 ]
 
 # MR
@@ -112,12 +114,12 @@ class TinyMLDenseAe(nn.Module):
         return x[:, :, 0, 0], w_complexity
 
     def complexity_loss(self):
-        size_product = []
+        #size_product = []
         loss = 0
         for m in self.modules():
             if isinstance(m, self.conv_func):
-                loss += m.complexity_loss()
-                size_product += [m.size_product]
+                loss += m.complexity_loss_cycle()
+                #size_product += [m.size_product]
         #normalizer = size_product[0].item()
         #loss /= normalizer
         return loss
@@ -160,4 +162,14 @@ def mixdenseae_w248a8_multiprec(**kwargs):
 # MR
 def mixdenseae_w248a8_chan(**kwargs):
     return TinyMLDenseAe(qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[8],
+                  share_weight=True, **kwargs)
+
+# MR
+def mixdenseae_w248a248_multiprec(**kwargs):
+    return TinyMLDenseAe(qm.MultiPrecActivConv2d, search_fc='multi', wbits=[2, 4, 8], abits=[2, 4, 8],
+                  share_weight=True, **kwargs)
+
+# MR
+def mixdenseae_w248a248_chan(**kwargs):
+    return TinyMLDenseAe(qm.MixActivChanConv2d, search_fc='mixed', wbits=[2, 4, 8], abits=[2, 4, 8],
                   share_weight=True, **kwargs)

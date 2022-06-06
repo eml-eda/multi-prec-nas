@@ -4,12 +4,16 @@ import torch
 import torch.nn as nn
 import math
 from . import quant_module as qm
+from .hw_models import mpic_lut
 
 # MR
 __all__ = [
    'quantdenseae_fp', 
    'quantdenseae_w2a8', 'quantdenseae_w4a8', 'quantdenseae_w8a8',
+   'quantdenseae_w2a4', 'quantdenseae_w4a4', 'quantdenseae_w8a4',
+   'quantdenseae_w2a2', 'quantdenseae_w4a2', 'quantdenseae_w8a2',
    'quantdenseae_w248a8_multiprec', 'quantdenseae_w248a8_chan',
+   'quantdenseae_w248a248_multiprec', 'quantdenseae_w248a248_chan',
 ]
 
 class TinyMLDenseAe(nn.Module):
@@ -100,6 +104,7 @@ class TinyMLDenseAe(nn.Module):
 
     def fetch_arch_info(self):
         sum_bitops, sum_bita, sum_bitw = 0, 0, 0
+        sum_cycles = 0
         peak_wbit = 0
         layer_idx = 0
         for layer_name, m in self.named_modules():
@@ -137,6 +142,10 @@ class TinyMLDenseAe(nn.Module):
                 #        peak_layer = layer_name
                 else:
                     bitops = size_product * m.abits * m.wbit
+                    if not m.first_layer:
+                        cycles = size_product / mpic_lut(m.abits, m.wbit)
+                    else:
+                        cycles = size_product / mpic_lut(8, m.wbit)
                     bita = m.memory_size.item() * m.abits
                     bitw = m.param_size * m.wbit
                     #weight_shape = list(m.conv.weight.shape)
@@ -144,13 +153,15 @@ class TinyMLDenseAe(nn.Module):
                     #      'param: {:.3f}M * {}'.format(layer_idx, weight_shape, size_product, m.abit,
                     #                                   m.wbit, memory_size, m.abit, m.param_size, m.wbit))
                     sum_bitops += bitops
+                    sum_cycles += cycles
                     sum_bita += bita
                     sum_bitw += bitw
                     peak_wbit = max(peak_wbit, bitw)
                     if peak_wbit == bitw:
                         peak_layer = layer_name
                     layer_idx += 1
-        return sum_bitops, sum_bita, sum_bitw, peak_layer, peak_wbit
+        return sum_cycles, sum_bita, sum_bitw, peak_layer, peak_wbit
+        #return sum_bitops, sum_bita, sum_bitw, peak_layer, peak_wbit
 
 
 def _load_arch(arch_path, names_nbits):
@@ -265,6 +276,48 @@ def quantdenseae_w8a8(arch_cfg_path, **kwargs):
     return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
 
 # MR
+def quantdenseae_w2a4(arch_cfg_path, **kwargs):
+    archas, archws = [4] * 10, [2] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w4a4(arch_cfg_path, **kwargs):
+    archas, archws = [4] * 10, [4] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w8a4(arch_cfg_path, **kwargs):
+    archas, archws = [4] * 10, [8] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w2a2(arch_cfg_path, **kwargs):
+    archas, archws = [2] * 10, [2] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w4a2(arch_cfg_path, **kwargs):
+    archas, archws = [2] * 10, [4] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
+def quantdenseae_w8a2(arch_cfg_path, **kwargs):
+    archas, archws = [2] * 10, [8] * 10
+    #assert len(archas) == 10
+    #assert len(archws) == 10
+    return TinyMLDenseAe(qm.QuantMixActivChanConv2d, archws, archas, qtz_fc='mixed', **kwargs)
+
+# MR
 # qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
 def quantdenseae_w248a8_multiprec(arch_cfg_path, **kwargs):
     wbits, abits = [2, 4, 8], [8]
@@ -293,6 +346,58 @@ def quantdenseae_w248a8_multiprec(arch_cfg_path, **kwargs):
 # MR, as mp
 def quantdenseae_w248a8_chan(arch_cfg_path, **kwargs):
     wbits, abits = [2, 4, 8], [8]
+    name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
+    best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w in best_arch['alpha_weight']]
+    #assert len(archas) == 21 # 21 insead of 19 because fc activations are also quantized (the first element [8] is dummy)
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized
+    model = TinyMLDenseAe(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        checkpoint = torch.load(arch_cfg_path)
+        weight_state_dict = _remove_alpha(checkpoint['state_dict'])
+        model.load_state_dict(weight_state_dict, strict=False)
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        import pdb; pdb.set_trace()
+        model.load_state_dict(alpha_state_dict, strict=False)
+    else:
+        # Load all weights
+        alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
+        #state_dict = torch.load(arch_cfg_path)['state_dict']
+        #model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model
+
+# MR
+# qtz_fc: None or 'fixed' or 'mixed' or 'multi' 
+def quantdenseae_w248a248_multiprec(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [2, 4, 8]
+
+    ## This block of code is only necessary to comply with the underlying EdMIPS code ##
+    best_arch, worst_arch = _load_arch_multi_prec(arch_cfg_path)
+    archas = [abits for a in best_arch['alpha_activ']]
+    archws = [wbits for w_ch in best_arch['alpha_weight']]
+    #if len(archws) == 20:
+        # Case of fixed-precision on last fc layer
+    #    archws.append(8)
+    #assert len(archas) == 21 # 21 insead of 19 because conv1 and fc activations are also quantized
+    #assert len(archws) == 21 # 21 instead of 19 because conv1 and fc weights are also quantized 
+    ##
+    model = TinyMLDenseAe(qm.QuantMultiPrecActivConv2d, archws, archas, qtz_fc='multi', **kwargs)
+    if kwargs['fine_tune']:
+        # Load all weights
+        state_dict = torch.load(arch_cfg_path)['state_dict']
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        # Load only alphas weights
+        alpha_state_dict = _load_alpha_state_dict(arch_cfg_path)
+        model.load_state_dict(alpha_state_dict, strict=False)
+    return model
+
+# MR, as mp
+def quantdenseae_w248a248_chan(arch_cfg_path, **kwargs):
+    wbits, abits = [2, 4, 8], [2, 4, 8]
     name_nbits = {'alpha_activ': len(abits), 'alpha_weight': len(wbits)}
     best_arch, worst_arch = _load_arch(arch_cfg_path, name_nbits)
     archas = [abits for a in best_arch['alpha_activ']]

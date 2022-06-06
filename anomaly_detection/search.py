@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import math
 import pathlib
@@ -376,7 +377,7 @@ def main_worker(gpu, ngpus_per_node, args):
                     param.requires_grad = True
     elif args.warmup_8bit:
         pretrained_checkpoint = args.data.parent.parent / ('warmup_8bit.pth.tar')
-        state_dict_8bit = torch.load(pretrained_checkpoint)['state_dict']
+        state_dict_8bit = preprocess_dict(torch.load(pretrained_checkpoint)['state_dict'])
         model.load_state_dict(state_dict_8bit, strict=False)
     else:
         print('=> no warmup')
@@ -631,7 +632,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
     curr_lra = arch_optimizer.param_groups[0]['lr']
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses],
+        [batch_time, data_time, losses, complexity_losses],
         prefix="Epoch: [{}/{}]\t"
                "LR: {}\t"
                "LRA: {}\t".format(epoch, args.epochs, curr_lr, curr_lra))
@@ -649,7 +650,7 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
         target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output, loss_complexity = model(images.view(images.shape[0], images.shape[1], 1, 1), temp, args.hard_gs)
+        output, _ = model(images.view(images.shape[0], images.shape[1], 1, 1), temp, args.hard_gs)
         loss = criterion(output, target)
 
         # measure accuracy and record loss
@@ -657,11 +658,11 @@ def train_epoch(train_loader, model, criterion, optimizer, arch_optimizer, epoch
 
         # complexity penalty
         if args.complexity_decay != 0 and scope == 'Search':
-            #if hasattr(model, 'module'):
-            #    loss_complexity = args.complexity_decay * model.module.complexity_loss()
-            #else:
-            #    loss_complexity = args.complexity_decay * model.complexity_loss()
-            loss_complexity = args.complexity_decay * loss_complexity
+            if hasattr(model, 'module'):
+                loss_complexity = args.complexity_decay * model.module.complexity_loss()
+            else:
+                loss_complexity = args.complexity_decay * model.complexity_loss()
+            #loss_complexity = args.complexity_decay * loss_complexity
             loss += loss_complexity
         else:
             loss_complexity = 0
@@ -907,6 +908,14 @@ def get_data_table(arch):
             frac = sum([1 for val in w_buffer if val == prec]) / len(w_buffer)
             table_w.append(['', prec, frac])
     return table_a, table_w
+
+def preprocess_dict(state_dict):
+    new_dict = copy.deepcopy(state_dict)
+    for key in state_dict.keys():
+        name = key.split('.')[-1]
+        if name == 'alpha_activ':
+            new_dict.pop(key)
+    return new_dict
 
 # MR
 def sample_arch(state_dict):
