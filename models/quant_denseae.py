@@ -411,7 +411,6 @@ def quantdenseae_w248a248_chan(arch_cfg_path, **kwargs):
         weight_state_dict = _remove_alpha(checkpoint['state_dict'])
         model.load_state_dict(weight_state_dict, strict=False)
         alpha_state_dict = _load_alpha_state_dict_as_mp(arch_cfg_path, model)
-        import pdb; pdb.set_trace()
         model.load_state_dict(alpha_state_dict, strict=False)
     else:
         # Load all weights
