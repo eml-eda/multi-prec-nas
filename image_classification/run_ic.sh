@@ -4,20 +4,10 @@ strength=$1
 warmup=$2
 path="."
 
-#arch="res8_fp"
-#arch="res8_w8a8"
-#arch="res8_w4a8"
-#arch="res8_w2a8"
-#arch="res8_w248a8_chan"
-#arch="res8_w248a8_multiprec"
-#arch="res8_w248a248_multiprec"
 arch=$3
 
 project="multi-precision-nas_ic"
 
-#tags="warmup"
-#tags="fp"
-#tags="init_same no_wp reg_w"
 tags="init_same wp reg_w softemp"
 
 mkdir -p ${path}/${arch}
