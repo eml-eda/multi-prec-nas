@@ -2,6 +2,7 @@
 *.pyc
 *.tar
 log*
+*.log
 data/
 *.jpg
 sync_wandb.sh
