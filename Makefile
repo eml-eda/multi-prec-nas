@@ -20,9 +20,7 @@ andet-init:
 	rm ${ZIPFILE_andet}
 
 image_classification-init:
-	mkdir -p image_classification/log
-	mkdir -p image_classification/saved_models
-	mkdir -p image_classification/data
+	echo "nothing to do"
 
 kws-init:
 	echo "nothing to do"

@@ -2,33 +2,15 @@
 
 strength=$1
 warmup=$2
-#path="/space/risso/multi_prec_exp"
 path="."
-# arch: {mix, quant}mobilenetv1_w248a248_multiprec, {mix, quant}mobilenetv1_w0248a248_multiprec
-#arch="mobilenetv1_fp"
-#arch="mobilenetv1_w2a8"
-#arch="mobilenetv1_w4a8"
-#arch="mobilenetv1_w8a8"
-#arch="mobilenetv1_w8a8_pretrained"
-#arch="mobilenetv1_w0248a8_multiprec"
-#arch="mobilenetv1_w248a8_multiprec"
-#arch="mobilenetv1_w248a8_chan"
-#arch="mobilenetv1_w248a8_chan_mp"
-
 arch=$3
 
 project="multi-precision-nas_vww"
 
-#tags="warmup"
-#tags="fp"
-#tags="init_same warmup reg_w gumbel"
 tags="init_same warmup reg_w"
-#tags="init_same warmup reg_w ft_as_mp"
 
 mkdir -p ${path}/${arch}
 mkdir -p ${path}/${arch}/model_${strength}
-
-#split=0.0
 
 if [[ "$4" == "search" ]]; then
     echo Search
@@ -41,8 +23,6 @@ if [[ "$4" == "search" ]]; then
         --seed 42 --gpu 0 \
         --no-gumbel-softmax --temperature 5 --anneal-temp \
         --visualization -pr ${project} --tags ${tags} --debug | tee ${path}/${arch}/model_${strength}/log_search_${strength}.txt
-        #--no-gumbel-softmax --temperature 5 --anneal-temp \
-        #--visualization -pr ${project} --tags ${tags} --debug | tee ${arch}/model_${strength}/log_search_${strength}.txt
 fi
 
 if [[ "$5" == "ft" ]]; then

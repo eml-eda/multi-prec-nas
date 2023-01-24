@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
+
 strength=$1
 warmup=$2
-#path="/space/risso/multi_prec_exp/kws"
 path="."
-# arch: {mix, quant}mobilenetv1_w248a248_multiprec, {mix, quant}mobilenetv1_w0248a248_multiprec
-#arch="dscnn_fp"
-#arch="dscnn_w8a8"
-#arch="dscnn_w248a8_multiprec"
 
 arch=$3
 
 project="multi-Precision-nas_kws"
 
-#tags="warmup"
-#tags="fp"
-#tags="w8a8"
 tags="init_same no_wp reg_w softemp"
 
 mkdir -p ${path}/${arch}
