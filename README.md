@@ -1,3 +1,6 @@
+**NEW RELEASE: we released our new, engineered and user-friendly DNAS library named [PLiNIO](https://github.com/eml-eda/plinio) which includes channel-wise precision assignement among the different implemented methods. We highly suggest to try this new release for your experiments!**
+
+
 Copyright (C) 2022 Politecnico di Torino, Italy. SPDX-License-Identifier: Apache-2.0. See LICENSE file for details.
 
 Authors: Matteo Risso, Alessio Burrello, Luca Benini, Enrico Macii, Massimo Poncino, Daniele Jahier Pagliari
